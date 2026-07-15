@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
@@ -17,9 +18,10 @@ EMAIL = "yashashchandrakollu1@gmail.com"
 PHONE = "+1 (205) 897 7790"
 PHONE_LINK = "tel:+1%20(205)%20897%207790"
 LOCATION = "Atlanta, GA"
-DEFAULT_OUTPUT = "Yashashchandra_Kollu_Resume.docx"
+DEFAULT_OUTPUT_DIR = Path("/Users/yck/Desktop/CLGENAPPL")
 
 FONT_CHOICES = (
+    "Aptos",
     "Arial",
     "Calibri",
     "Cambria",
@@ -65,6 +67,11 @@ EDUCATION_LINES = (
     ("Master of Science in Computer Science", "August 2024 – May 2026"),
     ("University of Alabama at Birmingham, AL  |  GPA: 4.0 / 4.0", ""),
 )
+
+
+def default_output_filename() -> str:
+    today = date.today()
+    return f"YcKResumeXXX{today:%d%b}.docx"
 
 
 def load_docx_dependencies() -> None:
@@ -426,7 +433,7 @@ class ResumeWriterApp(tk.Tk):
         self.name_size_var = tk.StringVar(value="16")
         self.heading_size_var = tk.StringVar(value="12")
         self.body_size_var = tk.StringVar(value="11")
-        self.output_var = tk.StringVar(value=str(Path.home() / "Documents" / DEFAULT_OUTPUT))
+        self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR / default_output_filename()))
 
         self._configure_style()
         self._build_ui()
@@ -612,7 +619,7 @@ class ResumeWriterApp(tk.Tk):
             title="Save resume as",
             defaultextension=".docx",
             filetypes=(("Word document", "*.docx"), ("All files", "*.*")),
-            initialfile=DEFAULT_OUTPUT,
+            initialfile=default_output_filename(),
         )
         if selected:
             self.output_var.set(selected)
