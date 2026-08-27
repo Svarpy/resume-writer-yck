@@ -6,10 +6,14 @@ A small Python desktop application that collects resume content and writes a `.d
 
 - Tkinter desktop GUI with dropdowns for font, name size, heading size, and normal text size.
 - Text boxes for Summary, Skills, Job Experience, Certifications, and Top 5 Skills.
+- Keyboard support: Tab moves between fields, and Command+Return on Mac or Ctrl+Enter on Windows/Linux generates the DOCX when valid.
+- Generate stays disabled until Summary, Skills, Job Experience, and Top 5 Skills are complete; Summary must be 41-50 words.
+- Editable header fields for name, email, phone, and location after the output section.
+- Light/dark mode toggle and Help menu with usage/about details.
 - Job Experience accepts pasted lines such as `Company | January 2025 - May 2026`; dated lines are aligned left/right, and all other lines become bullets by default.
 - The optional Certifications section is rendered after Education only when certification content is provided.
 - In Job Experience bullet points only, spaced em-dash separators such as ` — ` are converted to `, `.
-- Fixed education section and fixed header contact information from the base resume.
+- Editable Masters/Bachelors education entries, with Masters enabled by default.
 - Email and phone number hyperlinks in the generated Word file.
 - Horizontal separator rules between resume sections.
 - DOCX metadata:
