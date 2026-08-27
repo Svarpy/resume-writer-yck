@@ -4,3 +4,6 @@ __pycache__/
 sample_resume.docx
 rendered_sample/
 .venv/
+build/
+dist/
+XYZResumeWriter.spec
