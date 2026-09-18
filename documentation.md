@@ -1,6 +1,6 @@
 # Resume Writer Documentation
 
-Version: v2.0
+Version: v2.1
 
 Resume Writer is a desktop application for creating a formatted `.docx` resume from user-provided content. It is designed to keep the resume format consistent while allowing the main content, header details, education selections, certifications, and output file path to be edited from the app.
 
@@ -42,7 +42,11 @@ Resume Writer is a desktop application for creating a formatted `.docx` resume f
   - Masters is selected by default.
   - Bachelors can be selected when needed.
   - Each education entry can be edited by clicking its edit symbol.
-- Output file picker with a default save location.
+- Output folder picker with a generated filepath preview and a focused file-name field for the company portion of the resume filename.
+- Filename status marker:
+  - Hidden when the file-name field is empty.
+  - Green tick when no matching file is found.
+  - Red X when a matching file blocks generation.
 - Help menu with usage guidance.
 - About menu with application name and current version.
 
@@ -54,9 +58,15 @@ The app generates a local Word document in `.docx` format.
   `/Users/yck/Desktop/CLGENAPPL`
 - Default file name format:
   `YcKResumeXXXDDMMM.docx`
-- `XXX` is the company placeholder.
+- `XXX` is the company placeholder. The app provides a file-name field for this portion only.
 - `DD` is the current day.
 - `MMM` is the current month abbreviation, such as `Jul`, `Aug`, or `Sep`.
+- The selected output folder is shown as part of the filepath preview.
+- Duplicate filename checks look for matching `.docx` and `.pdf` files in:
+  - the selected output folder
+  - the selected output folder's `#applied` folder
+- The duplicate check is case-insensitive and checks whether the entered file-name value appears anywhere in an existing filename.
+- If `#applied` does not exist, the app creates it during validation.
 
 The generated resume includes:
 
@@ -94,6 +104,12 @@ Required fields:
 - Job Experience
 - Top 5 Skills For Metadata
 
+Output validation:
+
+- If the file-name field is blank, the generated filename keeps `XXX`.
+- If the file-name field has content, the app updates the filepath preview with that value.
+- If a matching `.docx` or `.pdf` already exists in the selected output folder or `#applied`, Generate DOCX stays disabled.
+
 Summary requirement:
 
 - Must be more than 40 words.
@@ -119,14 +135,14 @@ Keyboard shortcuts are also disabled until the required conditions are met.
 6. Enter or paste Job Experience.
 7. Enter Certifications if needed.
 8. Enter the Top 5 Skills For Metadata.
-9. Review the output file path.
-10. Replace `XXX` in the file name with the target company name.
+9. Review the output filepath preview.
+10. Enter the target company or filename value in the File Name field.
 11. Edit the header fields if needed.
 12. Select Masters and/or Bachelors in the education section.
 13. Edit education details if needed by clicking the edit symbol.
 14. Click Generate DOCX.
 
-After the file is generated successfully, the app clears the content input fields so the next resume can be started cleanly.
+After the file is generated successfully, the app clears the content input fields and the File Name field so the next resume can be started cleanly. The filepath preview remains on the last generated file for reference.
 
 ## Job Experience Input Tips
 
@@ -135,11 +151,12 @@ Use one item per line.
 For company or role lines with dates, use one of these formats:
 
 ```text
+First Horizon Bank | Atlanta, GA January 2025 - May 2026
 First Horizon Bank | Atlanta, GA | January 2025 - May 2026
 Software Engineer - Full Stack | January 2025 - May 2026
 ```
 
-The app aligns the left side and date side in the generated document.
+The app aligns the left side and date side in the generated document using fixed left/right columns. The date column is kept wide enough to prevent normal date ranges from wrapping.
 
 For achievement lines, paste each point on its own line:
 
@@ -306,6 +323,13 @@ Check that:
 - Job Experience is filled.
 - Top 5 Skills For Metadata is filled.
 - Output file path is filled.
+- No matching `.docx` or `.pdf` exists in the selected output folder or its `#applied` folder for the entered File Name value.
+
+### Red X Beside File Name
+
+The red X means a matching file may already exist. The match is case-insensitive and checks both `.docx` and `.pdf` files in the selected output folder and its `#applied` folder.
+
+Use a different File Name value, move/archive the matching file, or choose a different output folder.
 
 ### Dates In Job Experience Look Wrong
 

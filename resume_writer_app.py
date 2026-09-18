@@ -18,7 +18,7 @@ EMAIL = "yashashchandrakollu1@gmail.com"
 PHONE = "+1 (205) 897 7790"
 PHONE_LINK = "tel:+1%20(205)%20897%207790"
 LOCATION = "Atlanta, GA"
-APP_VERSION = "v2.0.0"
+APP_VERSION = "v2.1.0"
 DEFAULT_OUTPUT_DIR = Path("/Users/yck/Desktop/CLGENAPPL")
 
 FONT_CHOICES = (
@@ -42,18 +42,21 @@ DATE_RANGE_RE = re.compile(
     rf"\b(?:{MONTH_PATTERN})\s+\d{{4}}\s*(?:-|–|—|to)\s*(?:Present|Current|(?:{MONTH_PATTERN})\s+\d{{4}})\b",
     re.IGNORECASE,
 )
-KNOWN_EXPERIENCE_DATES = (
-    ("first horizon bank", "January 2025 – May 2026"),
-    ("aws cloud ai devops engineer", "January 2025 – May 2026"),
-    ("software engineer", "January 2025 – May 2026"),
-    ("dbs tech india", "July 2022 – July 2024"),
-    ("software developer full stack (sdeii)", "September 2023 – July 2024"),
-    ("software developer (sde ii)", "September 2023 – July 2024"),
-    ("software developer (sde i)", "July 2022 – September 2023"),
-    ("value labs", "February 2021 – March 2022"),
-    ("software developer – devops", "February 2021 – March 2022"),
-    ("software developer - devops", "February 2021 – March 2022"),
-)
+COMPANY_DATE_DEFAULTS = {
+    "first_horizon": "August 2025 – Present",
+    "dbs": "July 2022 – July 2024",
+    "value_labs": "February 2021 – March 2022",
+}
+COMPANY_ALIASES = {
+    "first_horizon": ("first horizon bank",),
+    "dbs": ("dbs bank", "dbs tech india"),
+    "value_labs": ("value labs",),
+}
+ROLE_DATE_DEFAULTS_BY_COMPANY = {
+    "first_horizon": ("August 2025 – Present",),
+    "dbs": ("September 2023 – July 2024", "July 2022 – September 2023"),
+    "value_labs": ("February 2021 – March 2022",),
+}
 
 THEMES = {
     "light": {
@@ -112,12 +115,37 @@ def default_output_filename() -> str:
     return f"YcKResumeXXX{today:%d%b}.docx"
 
 
+def default_output_filename_for(company_part: str = "") -> str:
+    today = date.today()
+    clean_part = re.sub(r"[^A-Za-z0-9_-]+", "", company_part.strip())
+    return f"YcKResume{clean_part or 'XXX'}{today:%d%b}.docx"
+
+
+def find_matching_output_files(output_dir: Path, name_part: str, *, include_applied: bool = True) -> list[Path]:
+    clean_part = re.sub(r"[^A-Za-z0-9_-]+", "", name_part.strip())
+    if not clean_part or not output_dir.exists() or not output_dir.is_dir():
+        return []
+    needle = clean_part.casefold()
+    matches = []
+    search_dirs = [output_dir]
+    applied_dir = output_dir / "#applied"
+    if include_applied and applied_dir.exists() and applied_dir.is_dir():
+        search_dirs.append(applied_dir)
+    for search_dir in search_dirs:
+        for path in search_dir.iterdir():
+            if path.suffix.casefold() not in {".docx", ".pdf"}:
+                continue
+            if needle in path.name.casefold():
+                matches.append(path)
+    return sorted(matches, key=lambda path: path.name.casefold())
+
+
 def load_docx_dependencies() -> None:
-    global Document, Inches, OxmlElement, Pt, WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, qn
+    global Document, Inches, OxmlElement, Pt, WD_ALIGN_PARAGRAPH, qn
 
     try:
         from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
         from docx.shared import Inches, Pt
@@ -173,42 +201,86 @@ def normalize_date_text(text: str) -> str:
     return re.sub(r"\s*(?:-|–|—|to)\s*", " – ", text.strip(), flags=re.IGNORECASE)
 
 
+def normalize_dated_left_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    return re.sub(r"\s*\|\s*", " | ", normalized).strip(" |,-")
+
+
+def split_right_side_date(left: str, right: str) -> Optional[Tuple[str, str]]:
+    match = DATE_RANGE_RE.search(right)
+    if not match:
+        return None
+    right_prefix = normalize_dated_left_text(right[: match.start()])
+    left_parts = [normalize_dated_left_text(left)]
+    if right_prefix:
+        left_parts.append(right_prefix)
+    return " ".join(part for part in left_parts if part), normalize_date_text(match.group(0))
+
+
 def split_dated_line(line: str) -> Optional[Tuple[str, str]]:
     stripped = line.strip()
 
     if "\t" in stripped:
         left, right = stripped.rsplit("\t", 1)
-        if DATE_RANGE_RE.search(right):
-            return left.strip(), normalize_date_text(right)
+        dated = split_right_side_date(left, right)
+        if dated:
+            return dated
 
     if "|" in stripped:
         left, right = stripped.rsplit("|", 1)
-        if DATE_RANGE_RE.search(right):
-            return left.strip(), normalize_date_text(right)
+        dated = split_right_side_date(left, right)
+        if dated:
+            return dated
 
     match = DATE_RANGE_RE.search(stripped)
     if match and match.start() > 0:
-        left = stripped[: match.start()].rstrip(" |,-")
+        left = normalize_dated_left_text(stripped[: match.start()])
         if left:
             return left, normalize_date_text(match.group(0))
 
-    known = split_known_experience_line(stripped)
-    if known:
-        return known
     return None
 
 
-def split_known_experience_line(line: str) -> Optional[Tuple[str, str]]:
+def detect_known_company(line: str) -> Optional[str]:
     normalized = re.sub(r"\s+", " ", line.strip())
     normalized_lower = normalized.lower()
     if DATE_RANGE_RE.search(normalized):
         return None
-    for label, date_text in KNOWN_EXPERIENCE_DATES:
-        if normalized_lower.startswith(label):
-            left = normalized.strip(" |,-")
-            left = re.sub(r"\s*\|\s*", " | ", left)
-            return left, date_text
+    for company_key, aliases in COMPANY_ALIASES.items():
+        if any(normalized_lower.startswith(alias) for alias in aliases):
+            return company_key
     return None
+
+
+def split_known_company_line(line: str) -> Optional[Tuple[str, str, str]]:
+    company_key = detect_known_company(line)
+    if not company_key:
+        return None
+    left = re.sub(r"\s+", " ", line.strip()).strip(" |,-")
+    left = re.sub(r"\s*\|\s*", " | ", left)
+    return left, COMPANY_DATE_DEFAULTS[company_key], company_key
+
+
+def fallback_role_date(company_key: Optional[str], role_index: int) -> Optional[str]:
+    if not company_key:
+        return None
+    dates = ROLE_DATE_DEFAULTS_BY_COMPANY.get(company_key, ())
+    if not dates:
+        return None
+    return dates[min(role_index, len(dates) - 1)]
+
+
+def looks_like_role_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.endswith("."):
+        return False
+    if len(stripped.split()) > 10:
+        return False
+    if re.search(r"\b(built|created|designed|developed|implemented|improved|reduced|delivered|managed|maintained)\b", stripped, re.IGNORECASE):
+        return False
+    if re.search(r"\b(engineer|developer|analyst|architect|consultant|intern|lead|manager|specialist|associate)\b", stripped, re.IGNORECASE):
+        return True
+    return False
 
 
 def set_run_font(run, font_name: str, size: int, bold: bool = False) -> None:
@@ -328,15 +400,102 @@ def add_bullet(document: Document, text: str, fmt: ResumeFormat, *, normalize_da
     add_text_run(paragraph, text, fmt)
 
 
+def set_cell_width(cell, width_inches: float) -> None:
+    cell.width = Inches(width_inches)
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_w = tc_pr.first_child_found_in("w:tcW")
+    if tc_w is None:
+        tc_w = OxmlElement("w:tcW")
+        tc_pr.append(tc_w)
+    tc_w.set(qn("w:w"), str(round(width_inches * 1440)))
+    tc_w.set(qn("w:type"), "dxa")
+
+
+def set_cell_no_wrap(cell) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    no_wrap = tc_pr.first_child_found_in("w:noWrap")
+    if no_wrap is None:
+        tc_pr.append(OxmlElement("w:noWrap"))
+
+
+def set_table_grid(table, widths_inches: tuple[float, ...]) -> None:
+    tbl_grid = table._tbl.tblGrid
+    for grid_col in list(tbl_grid):
+        tbl_grid.remove(grid_col)
+    for width_inches in widths_inches:
+        grid_col = OxmlElement("w:gridCol")
+        grid_col.set(qn("w:w"), str(round(width_inches * 1440)))
+        tbl_grid.append(grid_col)
+
+
+def set_cell_margins(cell, *, top: int = 0, start: int = 0, bottom: int = 0, end: int = 0) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_mar = tc_pr.first_child_found_in("w:tcMar")
+    if tc_mar is None:
+        tc_mar = OxmlElement("w:tcMar")
+        tc_pr.append(tc_mar)
+    for margin_name, value in (("top", top), ("start", start), ("bottom", bottom), ("end", end)):
+        margin = tc_mar.find(qn(f"w:{margin_name}"))
+        if margin is None:
+            margin = OxmlElement(f"w:{margin_name}")
+            tc_mar.append(margin)
+        margin.set(qn("w:w"), str(value))
+        margin.set(qn("w:type"), "dxa")
+
+
+def remove_table_borders(table) -> None:
+    tbl_pr = table._tbl.tblPr
+    borders = tbl_pr.first_child_found_in("w:tblBorders")
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tbl_pr.append(borders)
+    for border_name in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = borders.find(qn(f"w:{border_name}"))
+        if border is None:
+            border = OxmlElement(f"w:{border_name}")
+            borders.append(border)
+        border.set(qn("w:val"), "nil")
+
+
+def show_table_borders(table) -> None:
+    tbl_pr = table._tbl.tblPr
+    borders = tbl_pr.first_child_found_in("w:tblBorders")
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tbl_pr.append(borders)
+    for border_name in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = borders.find(qn(f"w:{border_name}"))
+        if border is None:
+            border = OxmlElement(f"w:{border_name}")
+            borders.append(border)
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), "6")
+        border.set(qn("w:space"), "0")
+        border.set(qn("w:color"), "FF0000")
+
+
 def add_tabbed_line(document: Document, left_text: str, right_text: str, fmt: ResumeFormat) -> None:
     right_text = normalize_date_text(right_text) if DATE_RANGE_RE.search(right_text) else right_text.strip()
-    paragraph = document.add_paragraph()
-    format_paragraph(paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.LEFT)
-    paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(6.27), alignment=WD_TAB_ALIGNMENT.RIGHT)
-    add_text_run(paragraph, left_text.strip(), fmt, bold=True)
+    table = document.add_table(rows=1, cols=2)
+    table.autofit = False
+    set_table_grid(table, (4.45, 2.55))
+    remove_table_borders(table)
+
+    left_cell, right_cell = table.rows[0].cells
+    set_cell_width(left_cell, 4.45)
+    set_cell_width(right_cell, 2.55)
+    set_cell_margins(left_cell)
+    set_cell_margins(right_cell)
+    set_cell_no_wrap(right_cell)
+
+    left_paragraph = left_cell.paragraphs[0]
+    format_paragraph(left_paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.LEFT)
+    add_text_run(left_paragraph, left_text.strip(), fmt, bold=True)
+
+    right_paragraph = right_cell.paragraphs[0]
+    format_paragraph(right_paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.RIGHT)
     if right_text.strip():
-        add_text_run(paragraph, "\t", fmt)
-        add_text_run(paragraph, right_text.strip(), fmt, bold=True)
+        add_text_run(right_paragraph, right_text.strip(), fmt, bold=True)
 
 
 def strip_bullet_marker(line: str) -> str:
@@ -344,18 +503,46 @@ def strip_bullet_marker(line: str) -> str:
 
 
 def add_experience_section(document: Document, lines: Iterable[str], fmt: ResumeFormat) -> None:
+    current_company = None
+    role_index_by_company: dict[str, int] = {}
+
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
 
-        dated = split_dated_line(strip_bullet_marker(stripped))
+        clean_line = strip_bullet_marker(stripped)
+        dated = split_dated_line(clean_line)
         if dated:
             left, right = dated
             add_tabbed_line(document, left, right, fmt)
+            detected_company = detect_known_company(left)
+            if detected_company:
+                current_company = detected_company
+                role_index_by_company.setdefault(current_company, 0)
+            elif looks_like_role_line(left):
+                role_index = role_index_by_company.get(current_company or "", 0)
+                if fallback_role_date(current_company, role_index):
+                    role_index_by_company[current_company] = role_index + 1
             continue
 
-        add_bullet(document, strip_bullet_marker(stripped), fmt, normalize_dash=True)
+        known_company = split_known_company_line(clean_line)
+        if known_company:
+            left, right, company_key = known_company
+            add_tabbed_line(document, left, right, fmt)
+            current_company = company_key
+            role_index_by_company.setdefault(current_company, 0)
+            continue
+
+        if looks_like_role_line(clean_line):
+            role_index = role_index_by_company.get(current_company or "", 0)
+            role_date = fallback_role_date(current_company, role_index)
+            if role_date:
+                add_tabbed_line(document, clean_line, role_date, fmt)
+                role_index_by_company[current_company] = role_index + 1
+                continue
+
+        add_bullet(document, clean_line, fmt, normalize_dash=True)
 
 
 def add_multiline_section(
@@ -501,7 +688,10 @@ class ResumeWriterApp(tk.Tk):
         self.name_size_var = tk.StringVar(value="16")
         self.heading_size_var = tk.StringVar(value="12")
         self.body_size_var = tk.StringVar(value="11")
-        self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR / default_output_filename()))
+        self.output_dir_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
+        self.output_name_part_var = tk.StringVar(value="")
+        self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR / default_output_filename_for()))
+        self.output_warning_var = tk.StringVar(value="")
         self.name_var = tk.StringVar(value=AUTHOR_NAME)
         self.email_var = tk.StringVar(value=EMAIL)
         self.phone_var = tk.StringVar(value=PHONE)
@@ -513,6 +703,7 @@ class ResumeWriterApp(tk.Tk):
 
         self._widgets_by_role = {}
         self._submit_widgets = []
+        self._suppress_output_path_refresh = False
 
         self._configure_style()
         self._build_menu()
@@ -602,12 +793,27 @@ class ResumeWriterApp(tk.Tk):
         output.grid(row=2, column=0, sticky="ew")
         output.columnconfigure(1, weight=1)
 
-        self._label(output, "File").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self._entry(output, self.output_var).grid(row=0, column=1, sticky="ew", padx=(0, 8))
-        self._button(output, "Browse", self._choose_output).grid(row=0, column=2, padx=(0, 8))
+        self._label(output, "File Path").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        output_path_frame = self._track(tk.Frame(output, bg=self.c("panel_bg")), "panel_frame")
+        output_path_frame.grid(row=0, column=1, columnspan=3, sticky="w", pady=(0, 8))
+        output_path_label = self._label(output_path_frame, "", muted=True)
+        output_path_label.configure(textvariable=self.output_var)
+        output_path_label.pack(side=tk.LEFT)
+        self._button(output_path_frame, "Browse", self._choose_output).pack(side=tk.LEFT)
+        self._label(output, "File Name").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        file_name_frame = self._track(tk.Frame(output, bg=self.c("panel_bg")), "panel_frame")
+        file_name_frame.grid(row=1, column=1, sticky="w")
+        self.file_name_entry = self._entry(file_name_frame, self.output_name_part_var, width=25)
+        self.file_name_entry.pack(side=tk.LEFT)
+        self.file_name_check_label = self._label(file_name_frame, "")
+        self.file_name_check_label.configure(font=("Arial", 14, "bold"), fg=self.c("ok_fg"))
+        self.file_name_check_label.pack(side=tk.LEFT)
         self.generate_button = self._button(output, "Generate DOCX", self._generate, accent=True)
-        self.generate_button.grid(row=0, column=3)
+        self.generate_button.grid(row=1, column=3)
         self._submit_widgets.append(self.generate_button)
+        self.output_warning_label = self._label(output, "", muted=True)
+        self.output_warning_label.configure(textvariable=self.output_warning_var)
+        self.output_warning_label.grid(row=2, column=1, columnspan=3, sticky="w", pady=(6, 0))
 
         header = self._section(root, "Header And Education")
         header.grid(row=3, column=0, sticky="ew", pady=(12, 0))
@@ -667,7 +873,10 @@ class ResumeWriterApp(tk.Tk):
             anchor="w",
         ), role)
 
-    def _entry(self, parent, variable: tk.StringVar) -> tk.Entry:
+    def _entry(self, parent, variable: tk.StringVar, *, width: Optional[int] = None) -> tk.Entry:
+        options = {}
+        if width is not None:
+            options["width"] = width
         entry = self._track(tk.Entry(
             parent,
             textvariable=variable,
@@ -679,6 +888,7 @@ class ResumeWriterApp(tk.Tk):
             highlightthickness=1,
             highlightbackground=self.c("border"),
             highlightcolor=self.c("accent"),
+            **options,
         ), "entry")
         entry.bind("<Return>", lambda _event: self.focus_get().tk_focusNext().focus_set() or "break")
         return entry
@@ -856,7 +1066,16 @@ class ResumeWriterApp(tk.Tk):
 
     def _track(self, widget, role: str):
         self._widgets_by_role.setdefault(role, []).append(widget)
+        self._add_submit_bindtag(widget)
         return widget
+
+    def _add_submit_bindtag(self, widget) -> None:
+        try:
+            bindtags = widget.bindtags()
+        except tk.TclError:
+            return
+        if "SubmitShortcut" not in bindtags:
+            widget.bindtags(("SubmitShortcut", *bindtags))
 
     def _focus_next(self, event) -> str:
         event.widget.tk_focusNext().focus_set()
@@ -867,10 +1086,16 @@ class ResumeWriterApp(tk.Tk):
         return "break"
 
     def _bind_shortcuts(self) -> None:
-        self.bind_all("<Command-Return>", self._shortcut_generate)
-        self.bind_all("<Control-Return>", self._shortcut_generate)
-        self.bind_all("<Command-KP_Enter>", self._shortcut_generate)
-        self.bind_all("<Control-KP_Enter>", self._shortcut_generate)
+        for sequence in (
+            "<Command-Return>",
+            "<Command-KeyPress-Return>",
+            "<Control-Return>",
+            "<Control-KeyPress-Return>",
+            "<Command-KP_Enter>",
+            "<Control-KP_Enter>",
+        ):
+            self.bind_class("SubmitShortcut", sequence, self._shortcut_generate)
+            self.bind(sequence, self._shortcut_generate)
 
     def _wire_validation(self) -> None:
         for variable in (
@@ -878,11 +1103,15 @@ class ResumeWriterApp(tk.Tk):
             self.email_var,
             self.phone_var,
             self.location_var,
+            self.output_dir_var,
+            self.output_name_part_var,
             self.output_var,
             self.masters_var,
             self.bachelors_var,
         ):
             variable.trace_add("write", lambda *_args: self._update_validation_state())
+        self.output_name_part_var.trace_add("write", lambda *_args: self._refresh_output_path())
+        self.output_dir_var.trace_add("write", lambda *_args: self._refresh_output_path())
 
     def _shortcut_generate(self, _event) -> str:
         if self._is_form_valid():
@@ -910,6 +1139,8 @@ class ResumeWriterApp(tk.Tk):
             errors.append("Top 5 Skills are required")
         if not self.output_var.get().strip():
             errors.append("Output file is required")
+        if self._matching_existing_output_files():
+            errors.append("A matching DOCX or PDF file already exists")
         return errors
 
     def _is_form_valid(self) -> bool:
@@ -933,6 +1164,7 @@ class ResumeWriterApp(tk.Tk):
         self._refresh_custom_controls()
         self._apply_button_state()
         self._style_status_labels(summary_ok=summary_ok, form_ok=not errors)
+        self._refresh_output_warning()
 
     def _style_status_labels(self, *, summary_ok: bool, form_ok: bool) -> None:
         for widget in self._widgets_by_role.get("muted_label", []):
@@ -1103,15 +1335,67 @@ class ResumeWriterApp(tk.Tk):
                 except tk.TclError:
                     pass
 
+    def _output_directory(self) -> Path:
+        return Path(self.output_dir_var.get().strip() or str(DEFAULT_OUTPUT_DIR)).expanduser()
+
+    def _applied_output_directory(self) -> Path:
+        return self._output_directory() / "#applied"
+
+    def _ensure_applied_output_directory(self) -> None:
+        self._applied_output_directory().mkdir(parents=True, exist_ok=True)
+
+    def _output_name_part(self) -> str:
+        return re.sub(r"[^A-Za-z0-9_-]+", "", self.output_name_part_var.get().strip())
+
+    def _output_path(self) -> Path:
+        return self._output_directory() / default_output_filename_for(self._output_name_part())
+
+    def _refresh_output_path(self) -> None:
+        if not hasattr(self, "output_var"):
+            return
+        if self._suppress_output_path_refresh:
+            return
+        new_path = str(self._output_path())
+        if self.output_var.get() != new_path:
+            self.output_var.set(new_path)
+
+    def _matching_existing_output_files(self) -> list[Path]:
+        try:
+            self._ensure_applied_output_directory()
+        except OSError:
+            return []
+        return find_matching_output_files(self._output_directory(), self._output_name_part())
+
+    def _refresh_output_warning(self) -> None:
+        if not hasattr(self, "output_warning_var"):
+            return
+        matches = self._matching_existing_output_files()
+        if matches:
+            output_dir = self._output_directory()
+            shown = ", ".join(str(path.relative_to(output_dir)) if path.is_relative_to(output_dir) else path.name for path in matches[:3])
+            extra = "" if len(matches) <= 3 else f" and {len(matches) - 3} more"
+            self.output_warning_var.set(f"Warning: matching file may already exist: {shown}{extra}")
+        else:
+            self.output_warning_var.set("")
+        if hasattr(self, "output_warning_label"):
+            self.output_warning_label.configure(fg=self.c("error_fg") if matches else self.c("muted_fg"))
+        if hasattr(self, "file_name_check_label"):
+            if not self.output_name_part_var.get().strip():
+                self.file_name_check_label.configure(text="", fg=self.c("ok_fg"))
+            elif matches:
+                self.file_name_check_label.configure(text="✕", fg=self.c("error_fg"))
+            else:
+                self.file_name_check_label.configure(text="✓", fg=self.c("ok_fg"))
+
     def _choose_output(self) -> None:
-        selected = filedialog.asksaveasfilename(
-            title="Save resume as",
-            defaultextension=".docx",
-            filetypes=(("Word document", "*.docx"), ("All files", "*.*")),
-            initialfile=default_output_filename(),
+        selected = filedialog.askdirectory(
+            title="Choose output folder",
+            initialdir=str(self._output_directory()),
         )
         if selected:
-            self.output_var.set(selected)
+            self.output_dir_var.set(selected)
+            self._refresh_output_path()
+            self._update_validation_state()
 
     def _generate(self) -> None:
         try:
@@ -1155,6 +1439,11 @@ class ResumeWriterApp(tk.Tk):
             self.top_skills_text,
         ):
             text_widget.delete("1.0", tk.END)
+        self._suppress_output_path_refresh = True
+        try:
+            self.output_name_part_var.set("")
+        finally:
+            self._suppress_output_path_refresh = False
         self._update_validation_state()
 
 

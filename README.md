@@ -8,9 +8,11 @@ A small Python desktop application that collects resume content and writes a `.d
 - Text boxes for Summary, Skills, Job Experience, Certifications, and Top 5 Skills.
 - Keyboard support: Tab moves between fields, and Command+Return on Mac or Ctrl+Enter on Windows/Linux generates the DOCX when valid.
 - Generate stays disabled until Summary, Skills, Job Experience, and Top 5 Skills are complete; Summary must be 41-50 words.
+- Output section shows the full generated path, with a focused file-name field for the `XXX` company portion of `YcKResumeXXXDDMMM.docx`.
+- Case-insensitive duplicate checks block generation when matching `.docx` or `.pdf` files exist in the selected output folder or its `#applied` folder.
 - Editable header fields for name, email, phone, and location after the output section.
 - Light/dark mode toggle and Help menu with usage/about details.
-- Job Experience accepts pasted lines such as `Company | January 2025 - May 2026`; dated lines are aligned left/right, and all other lines become bullets by default.
+- Job Experience accepts pasted lines such as `Company | Location January 2025 - May 2026`; dated lines are aligned with fixed left/right columns, and all other lines become bullets by default.
 - The optional Certifications section is rendered after Education only when certification content is provided.
 - In Job Experience bullet points only, spaced em-dash separators such as ` — ` are converted to `, `.
 - Editable Masters/Bachelors education entries, with Masters enabled by default.

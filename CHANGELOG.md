@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.1
+
+- Updated Job Experience fallback dates and preserved pasted dates before applying company-aware fallback defaults.
+- Stabilized dated resume rows with fixed-width left/right columns instead of spacing-based alignment.
+- Fixed submit shortcuts from text fields and added folder/name-based output validation with case-insensitive duplicate checks.
+- Refined output filename entry sizing and extended duplicate checks into the `#applied` folder.
+- Added filename status markers and clear the filename field after generation while preserving the last output path.
+
 ## v2.0
 
 - Added keyboard navigation and submission shortcuts.

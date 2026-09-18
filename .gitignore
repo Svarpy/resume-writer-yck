@@ -1,9 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
-sample_resume.docx
 rendered_sample/
 .venv/
 build/
 dist/
-XYZResumeWriter.spec
