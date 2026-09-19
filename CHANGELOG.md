@@ -1,5 +1,9 @@
 # Changelog
 
+> **Source of truth (Sprint 1):** This changelog has been migrated to the Notion teamspace **resume-writer-yck**.
+> Maintain updates on the Notion page: https://app.notion.com/p/3e0bfc4f45de80e38d83c7db6005af1e
+> This local file is retained pending Project Lead / PM approval to delete.
+
 ## v2.1
 
 - Updated Job Experience fallback dates and preserved pasted dates before applying company-aware fallback defaults.
