@@ -929,6 +929,7 @@ class ResumeWriterApp(tk.Tk):
         self.shell_container.pack(fill=tk.BOTH, expand=True)
         if self.shell is not None:
             self.shell.navigate("writer")
+        self._update_validation_state()
 
     def _logout(self) -> None:
         user_auth.clear_session()
@@ -951,7 +952,9 @@ class ResumeWriterApp(tk.Tk):
         if page is None:
             return
         page.lift()
-        if page_key == "formatter" and hasattr(self, "formatter_page"):
+        if page_key == "writer":
+            self._update_validation_state()
+        elif page_key == "formatter" and hasattr(self, "formatter_page"):
             self.formatter_page.refresh()
         elif page_key == "settings" and hasattr(self, "settings_page"):
             # Refresh profile fields without re-applying theme from disk every time
@@ -986,12 +989,59 @@ class ResumeWriterApp(tk.Tk):
         self.body_size_var.set(str(fmt.body_size))
 
     def _build_writer_ui(self, root) -> None:
+        # Clear previous children when rebuilding into the same shell page.
+        for child in root.winfo_children():
+            child.destroy()
+        self._prune_tracked_widgets()
+        self._submit_widgets = [widget for widget in self._submit_widgets if self._widget_alive(widget)]
+
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)
-        pad = self._track(tk.Frame(root, bg=self.c("app_bg"), padx=16, pady=16), "app_frame")
-        pad.pack(fill=tk.BOTH, expand=True)
+        root.rowconfigure(0, weight=1)
+
+        # Scrollable host so Output warnings / validation stay reachable inside the shell.
+        scroll_host = self._track(tk.Frame(root, bg=self.c("app_bg")), "app_frame")
+        scroll_host.grid(row=0, column=0, sticky="nsew")
+        scroll_host.columnconfigure(0, weight=1)
+        scroll_host.rowconfigure(0, weight=1)
+
+        canvas = self._track(
+            tk.Canvas(scroll_host, bg=self.c("app_bg"), highlightthickness=0, bd=0),
+            "app_frame",
+        )
+        scrollbar = tk.Scrollbar(scroll_host, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        pad = self._track(tk.Frame(canvas, bg=self.c("app_bg"), padx=16, pady=16), "app_frame")
+        pad_window = canvas.create_window((0, 0), window=pad, anchor="nw")
         pad.columnconfigure(0, weight=1)
-        pad.rowconfigure(1, weight=1)
+
+        def _on_pad_configure(_event=None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event) -> None:
+            canvas.itemconfigure(pad_window, width=max(event.width, 1))
+
+        def _on_mousewheel(event) -> str:
+            delta = getattr(event, "delta", 0)
+            if delta:
+                steps = -1 * int(delta) if abs(delta) >= 120 else -1 * int(delta)
+                if steps:
+                    canvas.yview_scroll(steps, "units")
+            elif getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                canvas.yview_scroll(1, "units")
+            return "break"
+
+        pad.bind("<Configure>", _on_pad_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            canvas.bind(sequence, _on_mousewheel)
+            pad.bind(sequence, _on_mousewheel)
+
+        self._writer_canvas = canvas
 
         controls = self._section(pad, "Format Options")
         controls.grid(row=0, column=0, sticky="ew")
@@ -1013,9 +1063,9 @@ class ResumeWriterApp(tk.Tk):
 
         self.summary_text = self._text_box(text_area, "Summary", 0, 0, height=7)
         self.skills_text = self._text_box(text_area, "Skills", 0, 1, height=7)
-        summary_footer = self._label(text_area, "", muted=True)
-        summary_footer.configure(textvariable=self.summary_count_var)
-        summary_footer.grid(row=2, column=0, sticky="w", pady=(0, 8))
+        self.summary_count_label = self._label(text_area, "", muted=True)
+        self.summary_count_label.configure(textvariable=self.summary_count_var)
+        self.summary_count_label.grid(row=2, column=0, sticky="w", pady=(0, 8))
         self.experience_text = self._text_box(text_area, "Job Experience", 3, 0, columnspan=2, height=7)
         self.certifications_text = self._text_box(text_area, "Certifications", 5, 0, height=7)
         self.top_skills_text = self._text_box(text_area, "Top 5 Skills For Metadata", 5, 1, height=7)
@@ -1038,13 +1088,16 @@ class ResumeWriterApp(tk.Tk):
         self.file_name_entry.pack(side=tk.LEFT)
         self.file_name_check_label = self._label(file_name_frame, "")
         self.file_name_check_label.configure(font=("Arial", 14, "bold"), fg=self.c("ok_fg"))
-        self.file_name_check_label.pack(side=tk.LEFT)
+        self.file_name_check_label.pack(side=tk.LEFT, padx=(8, 0))
         self.generate_button = self._button(output, "Generate DOCX", self._generate, accent=True)
         self.generate_button.grid(row=1, column=3)
         self._submit_widgets.append(self.generate_button)
         self.output_warning_label = self._label(output, "", muted=True)
         self.output_warning_label.configure(textvariable=self.output_warning_var)
         self.output_warning_label.grid(row=2, column=1, columnspan=3, sticky="w", pady=(6, 0))
+        self.validation_label = self._label(output, "")
+        self.validation_label.configure(textvariable=self.validation_var)
+        self.validation_label.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         header = self._section(pad, "Header And Education")
         header.grid(row=3, column=0, sticky="ew", pady=(12, 0))
@@ -1078,6 +1131,21 @@ class ResumeWriterApp(tk.Tk):
         self.bachelors_education_text.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.education_editor_frame.grid_remove()
         self.bachelors_education_text.grid_remove()
+
+        self._bind_writer_mousewheel(pad, _on_mousewheel)
+
+    def _bind_writer_mousewheel(self, widget, handler) -> None:
+        """Scroll the writer page without stealing wheel events from Text widgets."""
+        if isinstance(widget, tk.Text):
+            return
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            widget.bind(sequence, handler, add="+")
+        try:
+            children = widget.winfo_children()
+        except tk.TclError:
+            return
+        for child in children:
+            self._bind_writer_mousewheel(child, handler)
 
     def _build_ui(self) -> None:
         # Back-compat alias; writer UI is built into the shell writer page.
@@ -1339,6 +1407,16 @@ class ResumeWriterApp(tk.Tk):
         self._add_submit_bindtag(widget)
         return widget
 
+    def _widget_alive(self, widget) -> bool:
+        try:
+            return bool(widget.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _prune_tracked_widgets(self) -> None:
+        for role, widgets in list(self._widgets_by_role.items()):
+            self._widgets_by_role[role] = [widget for widget in widgets if self._widget_alive(widget)]
+
     def _add_submit_bindtag(self, widget) -> None:
         try:
             bindtags = widget.bindtags()
@@ -1430,6 +1508,8 @@ class ResumeWriterApp(tk.Tk):
             self.validation_var.set("Ready to generate.")
             submit_state = tk.NORMAL
         for widget in self._submit_widgets:
+            if not self._widget_alive(widget):
+                continue
             widget.configure(state=submit_state)
         self._refresh_custom_controls()
         self._apply_button_state()
@@ -1438,11 +1518,22 @@ class ResumeWriterApp(tk.Tk):
 
     def _style_status_labels(self, *, summary_ok: bool, form_ok: bool) -> None:
         for widget in self._widgets_by_role.get("muted_label", []):
+            if not self._widget_alive(widget):
+                continue
+            if widget in {
+                getattr(self, "summary_count_label", None),
+                getattr(self, "output_warning_label", None),
+            }:
+                continue
             try:
                 widget.configure(fg=self.c("muted_fg"))
             except tk.TclError:
                 pass
-        if hasattr(self, "validation_label"):
+        if hasattr(self, "summary_count_label") and self._widget_alive(self.summary_count_label):
+            self.summary_count_label.configure(
+                fg=self.c("ok_fg") if summary_ok else self.c("error_fg")
+            )
+        if hasattr(self, "validation_label") and self._widget_alive(self.validation_label):
             self.validation_label.configure(fg=self.c("ok_fg") if form_ok else self.c("error_fg"))
 
     def _apply_button_state(self) -> None:
@@ -1606,6 +1697,8 @@ class ResumeWriterApp(tk.Tk):
                     widget.configure(**options)
                 except tk.TclError:
                     pass
+        # Theme role defaults overwrite dynamic status colors; restore them.
+        self._update_validation_state()
 
     def _output_directory(self) -> Path:
         return Path(self.output_dir_var.get().strip() or str(DEFAULT_OUTPUT_DIR)).expanduser()
@@ -1649,9 +1742,9 @@ class ResumeWriterApp(tk.Tk):
             self.output_warning_var.set(f"Warning: matching file may already exist: {shown}{extra}")
         else:
             self.output_warning_var.set("")
-        if hasattr(self, "output_warning_label"):
+        if hasattr(self, "output_warning_label") and self._widget_alive(self.output_warning_label):
             self.output_warning_label.configure(fg=self.c("error_fg") if matches else self.c("muted_fg"))
-        if hasattr(self, "file_name_check_label"):
+        if hasattr(self, "file_name_check_label") and self._widget_alive(self.file_name_check_label):
             if not self.output_name_part_var.get().strip():
                 self.file_name_check_label.configure(text="", fg=self.c("ok_fg"))
             elif matches:
@@ -1712,8 +1805,14 @@ class ResumeWriterApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Could not generate resume", str(exc))
             return
-        self._clear_text_inputs()
+        try:
+            self.lift()
+            self.focus_force()
+            self.update_idletasks()
+        except tk.TclError:
+            pass
         messagebox.showinfo("Resume generated", f"Saved to:\n{output_path}")
+        self._clear_text_inputs()
 
     def _clear_text_inputs(self) -> None:
         for text_widget in (
