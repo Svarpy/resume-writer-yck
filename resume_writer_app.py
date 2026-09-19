@@ -12,6 +12,37 @@ os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+# Integ modules (auth + formats). Prefer real modules from the integ PR;
+# App UI imports these by shared module names.
+try:
+    from formats_store import DEFAULT_FORMAT_VALUES, get_format_for_writer
+except ImportError:  # pragma: no cover - until integ PR lands
+    DEFAULT_FORMAT_VALUES = {
+        "font_name": "Arial",
+        "name_size": 16,
+        "heading_size": 12,
+        "body_size": 11,
+    }
+
+    def get_format_for_writer(username=None):  # type: ignore[misc]
+        class _Spec:
+            def to_writer_kwargs(self):
+                return dict(DEFAULT_FORMAT_VALUES)
+
+        return _Spec()
+
+try:
+    import user_auth
+except ImportError:  # pragma: no cover - until integ PR lands
+    user_auth = None  # type: ignore[assignment]
+
+from docs_loader import load_how_to_use_section
+from ui_auth import AuthView
+from ui_documentation import DocumentationPage
+from ui_formatter import FormatterPage
+from ui_settings import SettingsPage
+from ui_shell import AppShell
+
 
 AUTHOR_NAME = "Yashashchandra Kollu"
 EMAIL = "yashashchandrakollu1@gmail.com"
@@ -155,10 +186,22 @@ def load_docx_dependencies() -> None:
 
 @dataclass(frozen=True)
 class ResumeFormat:
-    font_name: str = "Arial"
-    name_size: int = 16
-    heading_size: int = 12
-    body_size: int = 11
+    font_name: str = DEFAULT_FORMAT_VALUES["font_name"]
+    name_size: int = DEFAULT_FORMAT_VALUES["name_size"]
+    heading_size: int = DEFAULT_FORMAT_VALUES["heading_size"]
+    body_size: int = DEFAULT_FORMAT_VALUES["body_size"]
+
+
+def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
+    """Build a ResumeFormat from the user's primary format (or app default)."""
+    try:
+        current = None
+        if user_auth is not None:
+            current = username if username is not None else user_auth.get_current_user()
+        spec = get_format_for_writer(current)
+        return ResumeFormat(**spec.to_writer_kwargs())
+    except Exception:
+        return ResumeFormat()
 
 
 @dataclass(frozen=True)
@@ -684,10 +727,10 @@ class ResumeWriterApp(tk.Tk):
         self.minsize(860, 700)
 
         self.dark_mode_var = tk.BooleanVar(value=True)
-        self.font_var = tk.StringVar(value="Arial")
-        self.name_size_var = tk.StringVar(value="16")
-        self.heading_size_var = tk.StringVar(value="12")
-        self.body_size_var = tk.StringVar(value="11")
+        self.font_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["font_name"]))
+        self.name_size_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["name_size"]))
+        self.heading_size_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["heading_size"]))
+        self.body_size_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["body_size"]))
         self.output_dir_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.output_name_part_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR / default_output_filename_for()))
@@ -704,13 +747,231 @@ class ResumeWriterApp(tk.Tk):
         self._widgets_by_role = {}
         self._submit_widgets = []
         self._suppress_output_path_refresh = False
+        self._pages: dict[str, tk.Widget] = {}
+        self.theme_toggle = None
+        self.shell: Optional[AppShell] = None
+        self.auth_view: Optional[AuthView] = None
 
         self._configure_style()
         self._build_menu()
-        self._build_ui()
+        self._build_root_containers()
         self._bind_shortcuts()
         self._wire_validation()
+
+        if user_auth is not None and user_auth.get_current_user():
+            self._enter_authenticated_shell(user_auth.get_current_profile())
+        else:
+            self._show_auth()
+
+    def _build_root_containers(self) -> None:
+        self.auth_container = self._track(tk.Frame(self, bg=self.c("app_bg")), "app_frame")
+        self.shell_container = self._track(tk.Frame(self, bg=self.c("app_bg")), "app_frame")
+
+        self.auth_view = AuthView(
+            self.auth_container,
+            app=self,
+            on_authenticated=self._enter_authenticated_shell,
+        )
+        self.auth_view.pack(fill=tk.BOTH, expand=True)
+
+        self.shell = AppShell(
+            self.shell_container,
+            app=self,
+            on_logout=self._logout,
+            on_navigate=self._show_page,
+        )
+        self.shell.pack(fill=tk.BOTH, expand=True)
+
+        self.writer_page = self._track(tk.Frame(self.shell.content, bg=self.c("app_bg")), "app_frame")
+        self.formatter_page = FormatterPage(
+            self.shell.content,
+            app=self,
+            on_primary_changed=self._apply_primary_format,
+        )
+        self.settings_page = SettingsPage(
+            self.shell.content,
+            app=self,
+            on_theme_toggle=self._toggle_theme,
+        )
+        self.documentation_page = DocumentationPage(self.shell.content, app=self)
+
+        self._pages = {
+            "writer": self.writer_page,
+            "formatter": self.formatter_page,
+            "settings": self.settings_page,
+            "documentation": self.documentation_page,
+        }
+        for page in self._pages.values():
+            page.place(x=0, y=0, relwidth=1, relheight=1)
+
+        self._build_writer_ui(self.writer_page)
         self._update_validation_state()
+
+    def _show_auth(self) -> None:
+        self.shell_container.pack_forget()
+        self.auth_container.pack(fill=tk.BOTH, expand=True)
+        if self.auth_view is not None:
+            self.auth_view.focus_username()
+
+    def _enter_authenticated_shell(self, profile) -> None:
+        self.dark_mode_var.set(bool(getattr(profile, "dark_mode", True)))
+        self._configure_style()
+        self._apply_theme()
+        self._refresh_custom_controls()
+
+        if self.shell is not None:
+            self.shell.set_username(profile.username)
+            self.shell.apply_default_collapse_for_width(self.winfo_width() or 1060)
+
+        self._apply_primary_format_from_store()
+        self.auth_container.pack_forget()
+        self.shell_container.pack(fill=tk.BOTH, expand=True)
+        if self.shell is not None:
+            self.shell.navigate("writer")
+
+    def _logout(self) -> None:
+        if user_auth is not None:
+            user_auth.clear_session()
+        self._show_auth()
+
+    def _show_page(self, page_key: str) -> None:
+        page = self._pages.get(page_key)
+        if page is None:
+            return
+        page.lift()
+        if page_key == "formatter" and hasattr(self, "formatter_page"):
+            self.formatter_page.refresh()
+        elif page_key == "settings" and hasattr(self, "settings_page"):
+            # Refresh profile fields without re-applying theme from disk every time
+            # in a way that fights an in-progress toggle — load profile values only.
+            try:
+                if user_auth is not None:
+                    profile = user_auth.get_current_profile()
+                    self.settings_page.username_var.set(profile.username)
+                    self.settings_page.display_name_var.set(profile.display_name)
+                    self.settings_page.email_var.set(profile.email)
+            except Exception:
+                pass
+            if self.theme_toggle is not None:
+                self._draw_theme_toggle()
+        elif page_key == "documentation" and hasattr(self, "documentation_page"):
+            self.documentation_page.refresh()
+
+    def _apply_primary_format_from_store(self) -> None:
+        fmt = resume_format_from_store()
+        self._apply_format_to_writer_controls(fmt)
+
+    def _apply_primary_format(self, spec) -> None:
+        try:
+            kwargs = spec.to_writer_kwargs()
+            self._apply_format_to_writer_controls(ResumeFormat(**kwargs))
+        except Exception:
+            self._apply_primary_format_from_store()
+
+    def _apply_format_to_writer_controls(self, fmt: ResumeFormat) -> None:
+        self.font_var.set(str(fmt.font_name))
+        self.name_size_var.set(str(fmt.name_size))
+        self.heading_size_var.set(str(fmt.heading_size))
+        self.body_size_var.set(str(fmt.body_size))
+
+    def _build_writer_ui(self, root) -> None:
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+        pad = self._track(tk.Frame(root, bg=self.c("app_bg"), padx=16, pady=16), "app_frame")
+        pad.pack(fill=tk.BOTH, expand=True)
+        pad.columnconfigure(0, weight=1)
+        pad.rowconfigure(1, weight=1)
+
+        controls = self._section(pad, "Format Options")
+        controls.grid(row=0, column=0, sticky="ew")
+        for column in range(8):
+            controls.columnconfigure(column, weight=1 if column in (1, 3, 5, 7) else 0)
+
+        self._combo(controls, "Font", self.font_var, FONT_CHOICES, 0, 0)
+        self._combo(controls, "Name Size", self.name_size_var, NAME_SIZE_CHOICES, 0, 2)
+        self._combo(controls, "Heading Size", self.heading_size_var, HEADING_SIZE_CHOICES, 0, 4)
+        self._combo(controls, "Text Size", self.body_size_var, BODY_SIZE_CHOICES, 0, 6)
+
+        text_area = self._track(tk.Frame(pad, bg=self.c("app_bg")), "app_frame")
+        text_area.grid(row=1, column=0, sticky="nsew", pady=(12, 12))
+        text_area.columnconfigure(0, weight=1)
+        text_area.columnconfigure(1, weight=1)
+        text_area.rowconfigure(1, weight=1, minsize=96)
+        text_area.rowconfigure(4, weight=1, minsize=96)
+        text_area.rowconfigure(6, weight=1, minsize=96)
+
+        self.summary_text = self._text_box(text_area, "Summary", 0, 0, height=7)
+        self.skills_text = self._text_box(text_area, "Skills", 0, 1, height=7)
+        summary_footer = self._label(text_area, "", muted=True)
+        summary_footer.configure(textvariable=self.summary_count_var)
+        summary_footer.grid(row=2, column=0, sticky="w", pady=(0, 8))
+        self.experience_text = self._text_box(text_area, "Job Experience", 3, 0, columnspan=2, height=7)
+        self.certifications_text = self._text_box(text_area, "Certifications", 5, 0, height=7)
+        self.top_skills_text = self._text_box(text_area, "Top 5 Skills For Metadata", 5, 1, height=7)
+
+        output = self._section(pad, "Output")
+        output.grid(row=2, column=0, sticky="ew")
+        output.columnconfigure(1, weight=1)
+
+        self._label(output, "File Path").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        output_path_frame = self._track(tk.Frame(output, bg=self.c("panel_bg")), "panel_frame")
+        output_path_frame.grid(row=0, column=1, columnspan=3, sticky="w", pady=(0, 8))
+        output_path_label = self._label(output_path_frame, "", muted=True)
+        output_path_label.configure(textvariable=self.output_var)
+        output_path_label.pack(side=tk.LEFT)
+        self._button(output_path_frame, "Browse", self._choose_output).pack(side=tk.LEFT)
+        self._label(output, "File Name").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        file_name_frame = self._track(tk.Frame(output, bg=self.c("panel_bg")), "panel_frame")
+        file_name_frame.grid(row=1, column=1, sticky="w")
+        self.file_name_entry = self._entry(file_name_frame, self.output_name_part_var, width=25)
+        self.file_name_entry.pack(side=tk.LEFT)
+        self.file_name_check_label = self._label(file_name_frame, "")
+        self.file_name_check_label.configure(font=("Arial", 14, "bold"), fg=self.c("ok_fg"))
+        self.file_name_check_label.pack(side=tk.LEFT)
+        self.generate_button = self._button(output, "Generate DOCX", self._generate, accent=True)
+        self.generate_button.grid(row=1, column=3)
+        self._submit_widgets.append(self.generate_button)
+        self.output_warning_label = self._label(output, "", muted=True)
+        self.output_warning_label.configure(textvariable=self.output_warning_var)
+        self.output_warning_label.grid(row=2, column=1, columnspan=3, sticky="w", pady=(6, 0))
+
+        header = self._section(pad, "Header And Education")
+        header.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        for column in range(4):
+            header.columnconfigure(column, weight=1)
+
+        self._entry(header, self.name_var).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 8))
+        self._entry(header, self.email_var).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(0, 8))
+        self._entry(header, self.phone_var).grid(row=0, column=2, sticky="ew", padx=(0, 8), pady=(0, 8))
+        self._entry(header, self.location_var).grid(row=0, column=3, sticky="ew", pady=(0, 8))
+
+        education_controls = self._track(tk.Frame(header, bg=self.c("panel_bg")), "panel_frame")
+        education_controls.grid(row=1, column=0, columnspan=4, sticky="w")
+        self.masters_choice = self._choice_label(education_controls, "Masters", self.masters_var, self._toggle_masters)
+        self.masters_choice.pack(side=tk.LEFT)
+        self._icon_button(education_controls, "✎", lambda: self._show_education_editor("masters")).pack(side=tk.LEFT, padx=(4, 18))
+        self.bachelors_choice = self._choice_label(education_controls, "Bachelors", self.bachelors_var, self._toggle_bachelors)
+        self.bachelors_choice.pack(side=tk.LEFT)
+        self._icon_button(education_controls, "✎", lambda: self._show_education_editor("bachelors")).pack(side=tk.LEFT, padx=(4, 0))
+
+        self.education_editor_frame = self._track(tk.Frame(header, bg=self.c("panel_bg")), "panel_frame")
+        self.education_editor_frame.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        self.education_editor_frame.columnconfigure(0, weight=1)
+        self.education_editor_label = self._label(self.education_editor_frame, "Masters Education")
+        self.education_editor_label.grid(row=0, column=0, sticky="w")
+        self.masters_education_text = self._text_widget(self.education_editor_frame, height=3)
+        self.bachelors_education_text = self._text_widget(self.education_editor_frame, height=3)
+        self.masters_education_text.insert("1.0", DEFAULT_MASTERS_EDUCATION)
+        self.bachelors_education_text.insert("1.0", DEFAULT_BACHELORS_EDUCATION)
+        self.masters_education_text.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.bachelors_education_text.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.education_editor_frame.grid_remove()
+        self.bachelors_education_text.grid_remove()
+
+    def _build_ui(self) -> None:
+        # Back-compat alias; writer UI is built into the shell writer page.
+        if hasattr(self, "writer_page"):
+            self._build_writer_ui(self.writer_page)
 
     def _configure_style(self) -> None:
         self.theme = THEMES["dark" if self.dark_mode_var.get() else "light"]
@@ -743,110 +1004,8 @@ class ResumeWriterApp(tk.Tk):
         )
 
     def _show_usage_help(self) -> None:
-        messagebox.showinfo(
-            "Usage Help",
-            (
-                "Required fields: Summary, Skills, Job Experience, Top 5 Skills.\n"
-                "Summary must be 41-50 words.\n\n"
-                "Tab moves to the next field.\n"
-                "Generate with Command+Return on Mac or Ctrl+Enter on Windows/Linux.\n\n"
-                f"Default output folder:\n{DEFAULT_OUTPUT_DIR}"
-            ),
-        )
-
-    def _build_ui(self) -> None:
-        root = self._track(tk.Frame(self, bg=self.c("app_bg"), padx=16, pady=16), "app_frame")
-        root.pack(fill=tk.BOTH, expand=True)
-        root.columnconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)
-
-        controls = self._section(root, "Format Options")
-        controls.grid(row=0, column=0, sticky="ew")
-        for column in range(10):
-            controls.columnconfigure(column, weight=1 if column in (1, 3, 5, 7) else 0)
-
-        self._combo(controls, "Font", self.font_var, FONT_CHOICES, 0, 0)
-        self._combo(controls, "Name Size", self.name_size_var, NAME_SIZE_CHOICES, 0, 2)
-        self._combo(controls, "Heading Size", self.heading_size_var, HEADING_SIZE_CHOICES, 0, 4)
-        self._combo(controls, "Text Size", self.body_size_var, BODY_SIZE_CHOICES, 0, 6)
-        self.theme_toggle = self._toggle_button(controls, self.dark_mode_var, self._toggle_theme)
-        self.theme_toggle.grid(row=0, column=8, columnspan=2, sticky="e")
-
-        text_area = self._track(tk.Frame(root, bg=self.c("app_bg")), "app_frame")
-        text_area.grid(row=1, column=0, sticky="nsew", pady=(12, 12))
-        text_area.columnconfigure(0, weight=1)
-        text_area.columnconfigure(1, weight=1)
-        text_area.rowconfigure(1, weight=1, minsize=96)
-        text_area.rowconfigure(4, weight=1, minsize=96)
-        text_area.rowconfigure(6, weight=1, minsize=96)
-
-        self.summary_text = self._text_box(text_area, "Summary", 0, 0, height=7)
-        self.skills_text = self._text_box(text_area, "Skills", 0, 1, height=7)
-        summary_footer = self._label(text_area, "", muted=True)
-        summary_footer.configure(textvariable=self.summary_count_var)
-        summary_footer.grid(row=2, column=0, sticky="w", pady=(0, 8))
-        self.experience_text = self._text_box(text_area, "Job Experience", 3, 0, columnspan=2, height=7)
-        self.certifications_text = self._text_box(text_area, "Certifications", 5, 0, height=7)
-        self.top_skills_text = self._text_box(text_area, "Top 5 Skills For Metadata", 5, 1, height=7)
-
-        output = self._section(root, "Output")
-        output.grid(row=2, column=0, sticky="ew")
-        output.columnconfigure(1, weight=1)
-
-        self._label(output, "File Path").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
-        output_path_frame = self._track(tk.Frame(output, bg=self.c("panel_bg")), "panel_frame")
-        output_path_frame.grid(row=0, column=1, columnspan=3, sticky="w", pady=(0, 8))
-        output_path_label = self._label(output_path_frame, "", muted=True)
-        output_path_label.configure(textvariable=self.output_var)
-        output_path_label.pack(side=tk.LEFT)
-        self._button(output_path_frame, "Browse", self._choose_output).pack(side=tk.LEFT)
-        self._label(output, "File Name").grid(row=1, column=0, sticky="w", padx=(0, 8))
-        file_name_frame = self._track(tk.Frame(output, bg=self.c("panel_bg")), "panel_frame")
-        file_name_frame.grid(row=1, column=1, sticky="w")
-        self.file_name_entry = self._entry(file_name_frame, self.output_name_part_var, width=25)
-        self.file_name_entry.pack(side=tk.LEFT)
-        self.file_name_check_label = self._label(file_name_frame, "")
-        self.file_name_check_label.configure(font=("Arial", 14, "bold"), fg=self.c("ok_fg"))
-        self.file_name_check_label.pack(side=tk.LEFT)
-        self.generate_button = self._button(output, "Generate DOCX", self._generate, accent=True)
-        self.generate_button.grid(row=1, column=3)
-        self._submit_widgets.append(self.generate_button)
-        self.output_warning_label = self._label(output, "", muted=True)
-        self.output_warning_label.configure(textvariable=self.output_warning_var)
-        self.output_warning_label.grid(row=2, column=1, columnspan=3, sticky="w", pady=(6, 0))
-
-        header = self._section(root, "Header And Education")
-        header.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        for column in range(4):
-            header.columnconfigure(column, weight=1)
-
-        self._entry(header, self.name_var).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 8))
-        self._entry(header, self.email_var).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(0, 8))
-        self._entry(header, self.phone_var).grid(row=0, column=2, sticky="ew", padx=(0, 8), pady=(0, 8))
-        self._entry(header, self.location_var).grid(row=0, column=3, sticky="ew", pady=(0, 8))
-
-        education_controls = self._track(tk.Frame(header, bg=self.c("panel_bg")), "panel_frame")
-        education_controls.grid(row=1, column=0, columnspan=4, sticky="w")
-        self.masters_choice = self._choice_label(education_controls, "Masters", self.masters_var, self._toggle_masters)
-        self.masters_choice.pack(side=tk.LEFT)
-        self._icon_button(education_controls, "✎", lambda: self._show_education_editor("masters")).pack(side=tk.LEFT, padx=(4, 18))
-        self.bachelors_choice = self._choice_label(education_controls, "Bachelors", self.bachelors_var, self._toggle_bachelors)
-        self.bachelors_choice.pack(side=tk.LEFT)
-        self._icon_button(education_controls, "✎", lambda: self._show_education_editor("bachelors")).pack(side=tk.LEFT, padx=(4, 0))
-
-        self.education_editor_frame = self._track(tk.Frame(header, bg=self.c("panel_bg")), "panel_frame")
-        self.education_editor_frame.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(8, 0))
-        self.education_editor_frame.columnconfigure(0, weight=1)
-        self.education_editor_label = self._label(self.education_editor_frame, "Masters Education")
-        self.education_editor_label.grid(row=0, column=0, sticky="w")
-        self.masters_education_text = self._text_widget(self.education_editor_frame, height=3)
-        self.bachelors_education_text = self._text_widget(self.education_editor_frame, height=3)
-        self.masters_education_text.insert("1.0", DEFAULT_MASTERS_EDUCATION)
-        self.bachelors_education_text.insert("1.0", DEFAULT_BACHELORS_EDUCATION)
-        self.masters_education_text.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self.bachelors_education_text.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self.education_editor_frame.grid_remove()
-        self.bachelors_education_text.grid_remove()
+        how_to = load_how_to_use_section()
+        messagebox.showinfo("Usage Help", how_to[:1800] + ("…" if len(how_to) > 1800 else ""))
 
     def _section(self, parent, label: str) -> tk.LabelFrame:
         return self._track(tk.LabelFrame(
@@ -1216,7 +1375,7 @@ class ResumeWriterApp(tk.Tk):
         self._update_validation_state()
 
     def _refresh_custom_controls(self) -> None:
-        if hasattr(self, "theme_toggle"):
+        if getattr(self, "theme_toggle", None) is not None:
             self._draw_theme_toggle()
         for widget in self._widgets_by_role.get("choice_label", []):
             is_checked = bool(widget.choice_var.get())
@@ -1224,6 +1383,8 @@ class ResumeWriterApp(tk.Tk):
             widget.configure(text=f"{marker} {widget.choice_text}")
 
     def _draw_theme_toggle(self) -> None:
+        if getattr(self, "theme_toggle", None) is None:
+            return
         canvas = self.theme_toggle.toggle_canvas
         label = self.theme_toggle.toggle_label
         is_dark = self.dark_mode_var.get()
