@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
@@ -12,7 +12,16 @@ os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-from formats_store import DEFAULT_FORMAT_VALUES, get_format_for_writer
+from formats_store import (
+    DEFAULT_FORMAT_VALUES,
+    DocumentStructure,
+    ExperienceLayout,
+    HeadingStyle,
+    PageBorderStyle,
+    SeparatorStyle,
+    default_document_structure,
+    get_format_for_writer,
+)
 import user_auth
 from user_auth import get_current_user
 
@@ -170,6 +179,16 @@ class ResumeFormat:
     name_size: int = DEFAULT_FORMAT_VALUES["name_size"]
     heading_size: int = DEFAULT_FORMAT_VALUES["heading_size"]
     body_size: int = DEFAULT_FORMAT_VALUES["body_size"]
+    page_width_in: float = DEFAULT_FORMAT_VALUES["page_width_in"]
+    page_height_in: float = DEFAULT_FORMAT_VALUES["page_height_in"]
+    margin_top_in: float = DEFAULT_FORMAT_VALUES["margin_top_in"]
+    margin_right_in: float = DEFAULT_FORMAT_VALUES["margin_right_in"]
+    margin_bottom_in: float = DEFAULT_FORMAT_VALUES["margin_bottom_in"]
+    margin_left_in: float = DEFAULT_FORMAT_VALUES["margin_left_in"]
+    header_distance_in: float = DEFAULT_FORMAT_VALUES["header_distance_in"]
+    footer_distance_in: float = DEFAULT_FORMAT_VALUES["footer_distance_in"]
+    line_spacing: float = DEFAULT_FORMAT_VALUES["line_spacing"]
+    structure: DocumentStructure = field(default_factory=default_document_structure)
 
 
 def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
@@ -182,6 +201,16 @@ def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
         return ResumeFormat(**spec.to_writer_kwargs())
     except Exception:
         return ResumeFormat()
+
+
+def _alignment_from_name(name: str):
+    mapping = {
+        "left": WD_ALIGN_PARAGRAPH.LEFT,
+        "center": WD_ALIGN_PARAGRAPH.CENTER,
+        "right": WD_ALIGN_PARAGRAPH.RIGHT,
+        "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+    }
+    return mapping.get((name or "left").strip().lower(), WD_ALIGN_PARAGRAPH.LEFT)
 
 
 @dataclass(frozen=True)
@@ -313,24 +342,28 @@ def set_run_font(run, font_name: str, size: int, bold: bool = False) -> None:
     run.bold = bold
 
 
-def format_paragraph(paragraph, before: float = 0, after: float = 3, alignment=None) -> None:
+def format_paragraph(paragraph, before: float = 0, after: float = 3, alignment=None, line_spacing: float = 1.0) -> None:
     paragraph.paragraph_format.space_before = Pt(before)
     paragraph.paragraph_format.space_after = Pt(after)
-    paragraph.paragraph_format.line_spacing = 1.0
+    paragraph.paragraph_format.line_spacing = line_spacing
     if alignment is not None:
         paragraph.alignment = alignment
 
 
-def add_border_rule(document: Document) -> None:
+def add_border_rule(document: Document, fmt: Optional[ResumeFormat] = None) -> None:
+    structure = (fmt.structure if fmt is not None else None) or default_document_structure()
+    separator: SeparatorStyle = structure.separator
+    if not separator.enabled:
+        return
     paragraph = document.add_paragraph()
-    format_paragraph(paragraph, before=0, after=3)
+    format_paragraph(paragraph, before=0, after=3, line_spacing=fmt.line_spacing if fmt else 1.0)
     p_pr = paragraph._p.get_or_add_pPr()
     p_bdr = OxmlElement("w:pBdr")
     bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), "2")
-    bottom.set(qn("w:space"), "1")
-    bottom.set(qn("w:color"), "AAAAAA")
+    bottom.set(qn("w:val"), separator.val or "single")
+    bottom.set(qn("w:sz"), str(int(separator.sz)))
+    bottom.set(qn("w:space"), str(int(separator.space)))
+    bottom.set(qn("w:color"), separator.color or "AAAAAA")
     p_bdr.append(bottom)
     p_pr.append(p_bdr)
 
@@ -383,10 +416,17 @@ def add_text_run(paragraph, text: str, fmt: ResumeFormat, bold: bool = False) ->
 
 
 def add_section_heading(document: Document, title: str, fmt: ResumeFormat) -> None:
+    heading: HeadingStyle = fmt.structure.heading_style
     paragraph = document.add_paragraph()
-    format_paragraph(paragraph, before=8, after=3, alignment=WD_ALIGN_PARAGRAPH.LEFT)
+    format_paragraph(
+        paragraph,
+        before=heading.space_before_pt,
+        after=heading.space_after_pt,
+        alignment=_alignment_from_name(heading.alignment),
+        line_spacing=fmt.line_spacing,
+    )
     run = paragraph.add_run(title)
-    set_run_font(run, fmt.font_name, fmt.heading_size, bold=True)
+    set_run_font(run, fmt.font_name, fmt.heading_size, bold=heading.bold)
 
 
 def add_plain_paragraph(
@@ -499,26 +539,44 @@ def show_table_borders(table) -> None:
 
 def add_tabbed_line(document: Document, left_text: str, right_text: str, fmt: ResumeFormat) -> None:
     right_text = normalize_date_text(right_text) if DATE_RANGE_RE.search(right_text) else right_text.strip()
+    experience: ExperienceLayout = fmt.structure.experience
+
+    if experience.company_line_mode == "single_line":
+        paragraph = document.add_paragraph()
+        format_paragraph(paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.LEFT, line_spacing=fmt.line_spacing)
+        add_text_run(paragraph, left_text.strip(), fmt, bold=experience.company_bold)
+        if right_text.strip():
+            add_text_run(paragraph, f"  {right_text.strip()}", fmt, bold=experience.duration_bold)
+        return
+
+    left_w = float(experience.left_width_in) or 4.45
+    right_w = float(experience.right_width_in) or 2.55
     table = document.add_table(rows=1, cols=2)
     table.autofit = False
-    set_table_grid(table, (4.45, 2.55))
+    set_table_grid(table, (left_w, right_w))
     remove_table_borders(table)
 
     left_cell, right_cell = table.rows[0].cells
-    set_cell_width(left_cell, 4.45)
-    set_cell_width(right_cell, 2.55)
+    set_cell_width(left_cell, left_w)
+    set_cell_width(right_cell, right_w)
     set_cell_margins(left_cell)
     set_cell_margins(right_cell)
     set_cell_no_wrap(right_cell)
 
     left_paragraph = left_cell.paragraphs[0]
-    format_paragraph(left_paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.LEFT)
-    add_text_run(left_paragraph, left_text.strip(), fmt, bold=True)
+    format_paragraph(left_paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.LEFT, line_spacing=fmt.line_spacing)
+    add_text_run(left_paragraph, left_text.strip(), fmt, bold=experience.company_bold)
 
     right_paragraph = right_cell.paragraphs[0]
-    format_paragraph(right_paragraph, before=4, after=2, alignment=WD_ALIGN_PARAGRAPH.RIGHT)
+    format_paragraph(
+        right_paragraph,
+        before=4,
+        after=2,
+        alignment=_alignment_from_name(experience.duration_align),
+        line_spacing=fmt.line_spacing,
+    )
     if right_text.strip():
-        add_text_run(right_paragraph, right_text.strip(), fmt, bold=True)
+        add_text_run(right_paragraph, right_text.strip(), fmt, bold=experience.duration_bold)
 
 
 def strip_bullet_marker(line: str) -> str:
@@ -612,31 +670,54 @@ def add_education_entry(document: Document, education_text: str, fmt: ResumeForm
 
 def apply_document_defaults(document: Document, fmt: ResumeFormat) -> None:
     section = document.sections[0]
-    section.page_width = Inches(8.5)
-    section.page_height = Inches(11)
-    section.top_margin = Inches(0.75)
-    section.right_margin = Inches(0.75)
-    section.bottom_margin = Inches(0.75)
-    section.left_margin = Inches(0.75)
-    section.header_distance = Inches(0.4917)
-    section.footer_distance = Inches(0.4917)
+    section.page_width = Inches(fmt.page_width_in)
+    section.page_height = Inches(fmt.page_height_in)
+    section.top_margin = Inches(fmt.margin_top_in)
+    section.right_margin = Inches(fmt.margin_right_in)
+    section.bottom_margin = Inches(fmt.margin_bottom_in)
+    section.left_margin = Inches(fmt.margin_left_in)
+    section.header_distance = Inches(fmt.header_distance_in)
+    section.footer_distance = Inches(fmt.footer_distance_in)
 
     normal = document.styles["Normal"]
     normal.font.name = fmt.font_name
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), fmt.font_name)
     normal.font.size = Pt(fmt.body_size)
-    normal.paragraph_format.line_spacing = 1.0
+    normal.paragraph_format.line_spacing = fmt.line_spacing
 
     bullet = document.styles["List Bullet"]
     bullet.font.name = fmt.font_name
     bullet._element.rPr.rFonts.set(qn("w:eastAsia"), fmt.font_name)
     bullet.font.size = Pt(fmt.body_size)
 
+    apply_page_border(document, fmt.structure.page_border)
+
+
+def apply_page_border(document: Document, border: PageBorderStyle) -> None:
+    if not border.enabled:
+        return
+    section = document.sections[0]
+    sect_pr = section._sectPr
+    pg_borders = sect_pr.find(qn("w:pgBorders"))
+    if pg_borders is None:
+        pg_borders = OxmlElement("w:pgBorders")
+        sect_pr.append(pg_borders)
+    for side in border.sides:
+        el = pg_borders.find(qn(f"w:{side}"))
+        if el is None:
+            el = OxmlElement(f"w:{side}")
+            pg_borders.append(el)
+        el.set(qn("w:val"), border.val or "single")
+        el.set(qn("w:sz"), str(int(border.sz)))
+        el.set(qn("w:space"), str(int(border.space)))
+        el.set(qn("w:color"), border.color or "000000")
+
 
 def build_resume(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -> Path:
     load_docx_dependencies()
     document = Document()
     apply_document_defaults(document, fmt)
+    structure = fmt.structure or default_document_structure()
 
     core = document.core_properties
     core.author = content.name or AUTHOR_NAME
@@ -645,27 +726,69 @@ def build_resume(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -
     core.title = f"{content.name or AUTHOR_NAME} Resume"
 
     name_paragraph = document.add_paragraph()
-    format_paragraph(name_paragraph, before=0, after=3, alignment=WD_ALIGN_PARAGRAPH.LEFT)
+    format_paragraph(
+        name_paragraph,
+        before=0,
+        after=3,
+        alignment=_alignment_from_name(structure.name_alignment),
+        line_spacing=fmt.line_spacing,
+    )
     name_run = name_paragraph.add_run(content.name or AUTHOR_NAME)
     set_run_font(name_run, fmt.font_name, fmt.name_size, bold=True)
 
     contact = document.add_paragraph()
-    format_paragraph(contact, before=0, after=3, alignment=WD_ALIGN_PARAGRAPH.LEFT)
+    format_paragraph(
+        contact,
+        before=0,
+        after=3,
+        alignment=_alignment_from_name(structure.contact_alignment),
+        line_spacing=fmt.line_spacing,
+    )
     email = content.email or EMAIL
     phone = content.phone or PHONE
     location = content.location or LOCATION
+    sep = structure.contact_separator or "  |  "
     add_hyperlink(contact, email, f"mailto:{email}", fmt)
-    add_text_run(contact, "  |  ", fmt, bold=True)
+    add_text_run(contact, sep, fmt, bold=True)
     add_hyperlink(contact, phone, phone_hyperlink(phone), fmt)
-    add_text_run(contact, "  |  ", fmt, bold=True)
+    add_text_run(contact, sep, fmt, bold=True)
     add_text_run(contact, location, fmt)
 
-    add_border_rule(document)
-    add_section_heading(document, "SUMMARY", fmt)
+    section_renderers = {
+        "summary": lambda: _render_summary_section(document, content, fmt),
+        "skills": lambda: _render_skills_section(document, content, fmt),
+        "experience": lambda: _render_experience_section(document, content, fmt),
+        "education": lambda: _render_education_section(document, content, fmt),
+        "certifications": lambda: _render_certifications_section(document, content, fmt),
+    }
+
+    for key in structure.ordered_content_keys():
+        renderer = section_renderers.get(key)
+        if renderer is None:
+            continue
+        # Skip empty optional sections.
+        if key == "education" and not content.education_entries:
+            continue
+        if key == "certifications" and not content.certifications.strip():
+            continue
+        rule = structure.section_for(key)
+        heading = rule.heading if rule is not None else key.upper()
+        separator_before = rule.separator_before if rule is not None else True
+        if separator_before:
+            add_border_rule(document, fmt)
+        add_section_heading(document, heading, fmt)
+        renderer()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document.save(output_path)
+    return output_path
+
+
+def _render_summary_section(document: Document, content: ResumeContent, fmt: ResumeFormat) -> None:
     add_multiline_section(document, clean_lines(content.summary), fmt, paragraph_alignment=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-    add_border_rule(document)
-    add_section_heading(document, "SKILLS", fmt)
+
+def _render_skills_section(document: Document, content: ResumeContent, fmt: ResumeFormat) -> None:
     add_multiline_section(
         document,
         clean_lines(content.skills),
@@ -674,29 +797,23 @@ def build_resume(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -
         paragraph_alignment=WD_ALIGN_PARAGRAPH.LEFT,
     )
 
-    add_border_rule(document)
-    add_section_heading(document, "WORK EXPERIENCE", fmt)
+
+def _render_experience_section(document: Document, content: ResumeContent, fmt: ResumeFormat) -> None:
     add_experience_section(document, clean_lines(content.experience), fmt)
 
-    if content.education_entries:
-        add_border_rule(document)
-        add_section_heading(document, "EDUCATION", fmt)
-        for education_entry in content.education_entries:
-            add_education_entry(document, education_entry, fmt)
 
-    if content.certifications.strip():
-        add_border_rule(document)
-        add_section_heading(document, "Certifications", fmt)
-        add_multiline_section(
-            document,
-            clean_lines(content.certifications),
-            fmt,
-            paragraph_alignment=WD_ALIGN_PARAGRAPH.LEFT,
-        )
+def _render_education_section(document: Document, content: ResumeContent, fmt: ResumeFormat) -> None:
+    for education_entry in content.education_entries:
+        add_education_entry(document, education_entry, fmt)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(output_path)
-    return output_path
+
+def _render_certifications_section(document: Document, content: ResumeContent, fmt: ResumeFormat) -> None:
+    add_multiline_section(
+        document,
+        clean_lines(content.certifications),
+        fmt,
+        paragraph_alignment=WD_ALIGN_PARAGRAPH.LEFT,
+    )
 
 
 class ResumeWriterApp(tk.Tk):
@@ -1554,11 +1671,24 @@ class ResumeWriterApp(tk.Tk):
 
     def _generate(self) -> None:
         try:
+            # Typography can be tweaked in the Writer UI; page setup + structure
+            # always come from the primary (or default) format store.
+            stored = resume_format_from_store()
             fmt = ResumeFormat(
                 font_name=self.font_var.get(),
                 name_size=int(self.name_size_var.get()),
                 heading_size=int(self.heading_size_var.get()),
                 body_size=int(self.body_size_var.get()),
+                page_width_in=stored.page_width_in,
+                page_height_in=stored.page_height_in,
+                margin_top_in=stored.margin_top_in,
+                margin_right_in=stored.margin_right_in,
+                margin_bottom_in=stored.margin_bottom_in,
+                margin_left_in=stored.margin_left_in,
+                header_distance_in=stored.header_distance_in,
+                footer_distance_in=stored.footer_distance_in,
+                line_spacing=stored.line_spacing,
+                structure=stored.structure,
             )
             content = ResumeContent(
                 name=self.name_var.get().strip(),

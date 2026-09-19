@@ -3,6 +3,10 @@
 The built-in ``default`` format mirrors the historical hardcoded layout in
 ``resume_writer_app.ResumeFormat`` / ``apply_document_defaults``. It is always
 listed, cannot be edited or deleted, and is the fallback when no primary is set.
+
+Format XML version 2 adds a ``<structure>`` block that captures section order,
+heading labels, separators, experience line layout, and related page chrome so
+generation can replicate an uploaded Word template.
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ from __future__ import annotations
 import re
 import uuid
 import xml.etree.ElementTree as ET
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 from xml.dom import minidom
@@ -20,6 +24,7 @@ from user_auth import get_profile, update_profile
 
 DEFAULT_FORMAT_ID = "default"
 DEFAULT_FORMAT_NAME = "Default Application Format"
+FORMAT_XML_VERSION = "2"
 
 # Historical writer defaults (must stay in sync with ResumeFormat / page setup).
 DEFAULT_FORMAT_VALUES: dict[str, Any] = {
@@ -38,6 +43,21 @@ DEFAULT_FORMAT_VALUES: dict[str, Any] = {
     "line_spacing": 1.0,
 }
 
+# Map common heading phrases → canonical section keys used by the writer.
+_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "summary": ("summary", "professional summary", "profile", "objective"),
+    "skills": ("skills", "technical skills", "core competencies", "core skills"),
+    "experience": (
+        "work experience",
+        "experience",
+        "employment",
+        "professional experience",
+        "work history",
+    ),
+    "education": ("education", "academic background", "academics"),
+    "certifications": ("certifications", "certificates", "licenses", "licences"),
+}
+
 
 class FormatError(Exception):
     """Base class for format-store errors."""
@@ -53,6 +73,109 @@ class FormatProtectedError(FormatError):
 
 class FormatValidationError(FormatError):
     pass
+
+
+@dataclass
+class SeparatorStyle:
+    """Horizontal rule drawn between resume sections (paragraph bottom border)."""
+
+    enabled: bool = True
+    val: str = "single"
+    sz: int = 2
+    space: int = 1
+    color: str = "AAAAAA"
+
+
+@dataclass
+class HeadingStyle:
+    bold: bool = True
+    space_before_pt: float = 8.0
+    space_after_pt: float = 3.0
+    alignment: str = "left"  # left | center | right | justify
+
+
+@dataclass
+class ExperienceLayout:
+    """How company / role / duration lines are composed in WORK EXPERIENCE."""
+
+    company_line_mode: str = "two_column_table"  # two_column_table | single_line
+    left_width_in: float = 4.45
+    right_width_in: float = 2.55
+    company_bold: bool = True
+    duration_bold: bool = True
+    duration_align: str = "right"
+    role_below_company: bool = True
+    bullets_under_role: bool = True
+
+
+@dataclass
+class PageBorderStyle:
+    """Optional page-edge borders from sectPr/pgBorders."""
+
+    enabled: bool = False
+    val: str = "single"
+    sz: int = 4
+    space: int = 24
+    color: str = "000000"
+    sides: tuple[str, ...] = ("top", "left", "bottom", "right")
+
+
+@dataclass
+class SectionRule:
+    key: str
+    heading: str
+    separator_before: bool = True
+    order: int = 0
+
+
+@dataclass
+class DocumentStructure:
+    """Structural rules extracted from a template (or the historical default)."""
+
+    sections: list[SectionRule] = field(default_factory=list)
+    separator: SeparatorStyle = field(default_factory=SeparatorStyle)
+    heading_style: HeadingStyle = field(default_factory=HeadingStyle)
+    experience: ExperienceLayout = field(default_factory=ExperienceLayout)
+    page_border: PageBorderStyle = field(default_factory=PageBorderStyle)
+    contact_separator: str = "  |  "
+    name_alignment: str = "left"
+    contact_alignment: str = "left"
+
+    def section_for(self, key: str) -> Optional[SectionRule]:
+        for section in self.sections:
+            if section.key == key:
+                return section
+        return None
+
+    def ordered_content_keys(self) -> list[str]:
+        """Return content section keys in template order (excludes header chrome)."""
+        content_keys = {"summary", "skills", "experience", "education", "certifications"}
+        ordered = [s.key for s in sorted(self.sections, key=lambda s: s.order) if s.key in content_keys]
+        # Ensure every known section appears even if extraction missed one.
+        for key in ("summary", "skills", "experience", "education", "certifications"):
+            if key not in ordered:
+                ordered.append(key)
+        return ordered
+
+
+def default_document_structure() -> DocumentStructure:
+    """Historical Resume Writer layout (Default Application Format)."""
+    return DocumentStructure(
+        sections=[
+            SectionRule("summary", "SUMMARY", separator_before=True, order=0),
+            SectionRule("skills", "SKILLS", separator_before=True, order=1),
+            SectionRule("experience", "WORK EXPERIENCE", separator_before=True, order=2),
+            SectionRule("education", "EDUCATION", separator_before=True, order=3),
+            SectionRule("certifications", "Certifications", separator_before=True, order=4),
+        ],
+        separator=SeparatorStyle(),
+        heading_style=HeadingStyle(),
+        experience=ExperienceLayout(),
+        page_border=PageBorderStyle(enabled=False),
+        contact_separator="  |  ",
+        name_alignment="left",
+        contact_alignment="left",
+    )
 
 
 @dataclass
@@ -74,6 +197,7 @@ class ResumeFormatSpec:
     header_distance_in: float = DEFAULT_FORMAT_VALUES["header_distance_in"]
     footer_distance_in: float = DEFAULT_FORMAT_VALUES["footer_distance_in"]
     line_spacing: float = DEFAULT_FORMAT_VALUES["line_spacing"]
+    structure: DocumentStructure = field(default_factory=default_document_structure)
     protected: bool = False
     source: str = "manual"  # manual | docx | default
 
@@ -84,6 +208,16 @@ class ResumeFormatSpec:
             "name_size": int(self.name_size),
             "heading_size": int(self.heading_size),
             "body_size": int(self.body_size),
+            "page_width_in": float(self.page_width_in),
+            "page_height_in": float(self.page_height_in),
+            "margin_top_in": float(self.margin_top_in),
+            "margin_right_in": float(self.margin_right_in),
+            "margin_bottom_in": float(self.margin_bottom_in),
+            "margin_left_in": float(self.margin_left_in),
+            "header_distance_in": float(self.header_distance_in),
+            "footer_distance_in": float(self.footer_distance_in),
+            "line_spacing": float(self.line_spacing),
+            "structure": self.structure,
         }
 
     def summary(self) -> dict[str, Any]:
@@ -96,6 +230,8 @@ class ResumeFormatSpec:
             "name_size": self.name_size,
             "heading_size": self.heading_size,
             "body_size": self.body_size,
+            "section_count": len(self.structure.sections),
+            "has_separators": self.structure.separator.enabled,
         }
 
 
@@ -105,6 +241,7 @@ def default_format_spec() -> ResumeFormatSpec:
         name=DEFAULT_FORMAT_NAME,
         protected=True,
         source="default",
+        structure=default_document_structure(),
         **{k: v for k, v in DEFAULT_FORMAT_VALUES.items()},
     )
 
@@ -148,8 +285,154 @@ def _require_int(value: str, field_name: str) -> int:
         raise FormatValidationError(f"Invalid integer value for {field_name}") from exc
 
 
+def _bool_text(value: str, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _structure_to_xml(parent: ET.Element, structure: DocumentStructure) -> None:
+    root = ET.SubElement(parent, "structure")
+
+    sections_el = ET.SubElement(root, "sections")
+    for section in structure.sections:
+        sec = ET.SubElement(sections_el, "section", {"key": section.key, "order": str(section.order)})
+        ET.SubElement(sec, "heading").text = section.heading
+        ET.SubElement(sec, "separatorBefore").text = "true" if section.separator_before else "false"
+
+    sep = ET.SubElement(root, "separator")
+    ET.SubElement(sep, "enabled").text = "true" if structure.separator.enabled else "false"
+    ET.SubElement(sep, "val").text = structure.separator.val
+    ET.SubElement(sep, "sz").text = str(int(structure.separator.sz))
+    ET.SubElement(sep, "space").text = str(int(structure.separator.space))
+    ET.SubElement(sep, "color").text = structure.separator.color
+
+    heading = ET.SubElement(root, "headingStyle")
+    ET.SubElement(heading, "bold").text = "true" if structure.heading_style.bold else "false"
+    ET.SubElement(heading, "spaceBeforePt").text = str(structure.heading_style.space_before_pt)
+    ET.SubElement(heading, "spaceAfterPt").text = str(structure.heading_style.space_after_pt)
+    ET.SubElement(heading, "alignment").text = structure.heading_style.alignment
+
+    exp = ET.SubElement(root, "experienceLayout")
+    ET.SubElement(exp, "companyLineMode").text = structure.experience.company_line_mode
+    ET.SubElement(exp, "leftWidthIn").text = str(structure.experience.left_width_in)
+    ET.SubElement(exp, "rightWidthIn").text = str(structure.experience.right_width_in)
+    ET.SubElement(exp, "companyBold").text = "true" if structure.experience.company_bold else "false"
+    ET.SubElement(exp, "durationBold").text = "true" if structure.experience.duration_bold else "false"
+    ET.SubElement(exp, "durationAlign").text = structure.experience.duration_align
+    ET.SubElement(exp, "roleBelowCompany").text = "true" if structure.experience.role_below_company else "false"
+    ET.SubElement(exp, "bulletsUnderRole").text = "true" if structure.experience.bullets_under_role else "false"
+
+    border = ET.SubElement(root, "pageBorder")
+    ET.SubElement(border, "enabled").text = "true" if structure.page_border.enabled else "false"
+    ET.SubElement(border, "val").text = structure.page_border.val
+    ET.SubElement(border, "sz").text = str(int(structure.page_border.sz))
+    ET.SubElement(border, "space").text = str(int(structure.page_border.space))
+    ET.SubElement(border, "color").text = structure.page_border.color
+    ET.SubElement(border, "sides").text = ",".join(structure.page_border.sides)
+
+    ET.SubElement(root, "contactSeparator").text = structure.contact_separator
+    ET.SubElement(root, "nameAlignment").text = structure.name_alignment
+    ET.SubElement(root, "contactAlignment").text = structure.contact_alignment
+
+
+def _structure_from_xml(root: ET.Element) -> DocumentStructure:
+    structure_el = root.find("structure")
+    if structure_el is None:
+        return default_document_structure()
+
+    base = default_document_structure()
+    sections: list[SectionRule] = []
+    sections_el = structure_el.find("sections")
+    if sections_el is not None:
+        for sec in sections_el.findall("section"):
+            key = (sec.attrib.get("key") or "").strip()
+            if not key:
+                continue
+            order = _require_int(sec.attrib.get("order", str(len(sections))), "section.order")
+            heading = _text(sec, "heading", key.upper())
+            separator_before = _bool_text(_text(sec, "separatorBefore", "true"), True)
+            sections.append(SectionRule(key=key, heading=heading, separator_before=separator_before, order=order))
+    if not sections:
+        sections = list(base.sections)
+
+    sep_el = structure_el.find("separator")
+    separator = SeparatorStyle(
+        enabled=_bool_text(_text(sep_el, "enabled", "true"), True) if sep_el is not None else base.separator.enabled,
+        val=_text(sep_el, "val", base.separator.val) if sep_el is not None else base.separator.val,
+        sz=_require_int(_text(sep_el, "sz", str(base.separator.sz)), "separator.sz") if sep_el is not None else base.separator.sz,
+        space=_require_int(_text(sep_el, "space", str(base.separator.space)), "separator.space")
+        if sep_el is not None
+        else base.separator.space,
+        color=_text(sep_el, "color", base.separator.color) if sep_el is not None else base.separator.color,
+    )
+
+    head_el = structure_el.find("headingStyle")
+    heading_style = HeadingStyle(
+        bold=_bool_text(_text(head_el, "bold", "true"), True) if head_el is not None else base.heading_style.bold,
+        space_before_pt=_require_float(_text(head_el, "spaceBeforePt", str(base.heading_style.space_before_pt)), "spaceBeforePt")
+        if head_el is not None
+        else base.heading_style.space_before_pt,
+        space_after_pt=_require_float(_text(head_el, "spaceAfterPt", str(base.heading_style.space_after_pt)), "spaceAfterPt")
+        if head_el is not None
+        else base.heading_style.space_after_pt,
+        alignment=_text(head_el, "alignment", base.heading_style.alignment) if head_el is not None else base.heading_style.alignment,
+    )
+
+    exp_el = structure_el.find("experienceLayout")
+    experience = ExperienceLayout(
+        company_line_mode=_text(exp_el, "companyLineMode", base.experience.company_line_mode)
+        if exp_el is not None
+        else base.experience.company_line_mode,
+        left_width_in=_require_float(_text(exp_el, "leftWidthIn", str(base.experience.left_width_in)), "leftWidthIn")
+        if exp_el is not None
+        else base.experience.left_width_in,
+        right_width_in=_require_float(_text(exp_el, "rightWidthIn", str(base.experience.right_width_in)), "rightWidthIn")
+        if exp_el is not None
+        else base.experience.right_width_in,
+        company_bold=_bool_text(_text(exp_el, "companyBold", "true"), True) if exp_el is not None else base.experience.company_bold,
+        duration_bold=_bool_text(_text(exp_el, "durationBold", "true"), True) if exp_el is not None else base.experience.duration_bold,
+        duration_align=_text(exp_el, "durationAlign", base.experience.duration_align)
+        if exp_el is not None
+        else base.experience.duration_align,
+        role_below_company=_bool_text(_text(exp_el, "roleBelowCompany", "true"), True)
+        if exp_el is not None
+        else base.experience.role_below_company,
+        bullets_under_role=_bool_text(_text(exp_el, "bulletsUnderRole", "true"), True)
+        if exp_el is not None
+        else base.experience.bullets_under_role,
+    )
+
+    border_el = structure_el.find("pageBorder")
+    sides_raw = _text(border_el, "sides", ",".join(base.page_border.sides)) if border_el is not None else ",".join(base.page_border.sides)
+    sides = tuple(s.strip() for s in sides_raw.split(",") if s.strip()) or base.page_border.sides
+    page_border = PageBorderStyle(
+        enabled=_bool_text(_text(border_el, "enabled", "false"), False) if border_el is not None else False,
+        val=_text(border_el, "val", base.page_border.val) if border_el is not None else base.page_border.val,
+        sz=_require_int(_text(border_el, "sz", str(base.page_border.sz)), "pageBorder.sz")
+        if border_el is not None
+        else base.page_border.sz,
+        space=_require_int(_text(border_el, "space", str(base.page_border.space)), "pageBorder.space")
+        if border_el is not None
+        else base.page_border.space,
+        color=_text(border_el, "color", base.page_border.color) if border_el is not None else base.page_border.color,
+        sides=sides,
+    )
+
+    return DocumentStructure(
+        sections=sections,
+        separator=separator,
+        heading_style=heading_style,
+        experience=experience,
+        page_border=page_border,
+        contact_separator=_text(structure_el, "contactSeparator", base.contact_separator) or base.contact_separator,
+        name_alignment=_text(structure_el, "nameAlignment", base.name_alignment) or base.name_alignment,
+        contact_alignment=_text(structure_el, "contactAlignment", base.contact_alignment) or base.contact_alignment,
+    )
+
+
 def format_spec_to_xml(spec: ResumeFormatSpec) -> str:
-    root = ET.Element("resumeFormat", {"version": "1", "id": spec.id})
+    root = ET.Element("resumeFormat", {"version": FORMAT_XML_VERSION, "id": spec.id})
     ET.SubElement(root, "name").text = spec.name
     ET.SubElement(root, "protected").text = "true" if spec.protected else "false"
     ET.SubElement(root, "source").text = spec.source
@@ -173,9 +456,10 @@ def format_spec_to_xml(spec: ResumeFormatSpec) -> str:
     spacing = ET.SubElement(root, "spacing")
     ET.SubElement(spacing, "lineSpacing").text = str(spec.line_spacing)
 
+    _structure_to_xml(root, spec.structure or default_document_structure())
+
     rough = ET.tostring(root, encoding="utf-8")
     pretty = minidom.parseString(rough).toprettyxml(indent="  ", encoding="utf-8")
-    # minidom adds an XML declaration; return decoded string.
     return pretty.decode("utf-8")
 
 
@@ -234,11 +518,77 @@ def format_spec_from_xml(xml_text: str, *, fallback_id: str = "", fallback_name:
             "footerDistanceInches",
         ),
         line_spacing=line_spacing,
+        structure=_structure_from_xml(root),
     )
 
 
 def default_format_xml() -> str:
     return format_spec_to_xml(default_format_spec())
+
+
+def _coerce_structure(value: Any) -> DocumentStructure:
+    if value is None:
+        return default_document_structure()
+    if isinstance(value, DocumentStructure):
+        return value
+    if isinstance(value, dict):
+        base = default_document_structure()
+        sections_raw = value.get("sections") or []
+        sections: list[SectionRule] = []
+        for item in sections_raw:
+            if isinstance(item, SectionRule):
+                sections.append(item)
+            elif isinstance(item, dict):
+                sections.append(
+                    SectionRule(
+                        key=str(item.get("key", "")),
+                        heading=str(item.get("heading", "")),
+                        separator_before=bool(item.get("separator_before", True)),
+                        order=int(item.get("order", len(sections))),
+                    )
+                )
+        sep = value.get("separator", {})
+        if isinstance(sep, SeparatorStyle):
+            separator = sep
+        elif isinstance(sep, dict):
+            separator = SeparatorStyle(**{**asdict(base.separator), **sep})
+        else:
+            separator = base.separator
+        head = value.get("heading_style", {})
+        if isinstance(head, HeadingStyle):
+            heading_style = head
+        elif isinstance(head, dict):
+            heading_style = HeadingStyle(**{**asdict(base.heading_style), **head})
+        else:
+            heading_style = base.heading_style
+        exp = value.get("experience", {})
+        if isinstance(exp, ExperienceLayout):
+            experience = exp
+        elif isinstance(exp, dict):
+            experience = ExperienceLayout(**{**asdict(base.experience), **exp})
+        else:
+            experience = base.experience
+        border = value.get("page_border", {})
+        if isinstance(border, PageBorderStyle):
+            page_border = border
+        elif isinstance(border, dict):
+            payload = {**asdict(base.page_border), **border}
+            if isinstance(payload.get("sides"), list):
+                payload["sides"] = tuple(payload["sides"])
+            page_border = PageBorderStyle(**payload)
+        else:
+            page_border = base.page_border
+        return DocumentStructure(
+            sections=sections or list(base.sections),
+            separator=separator,
+            heading_style=heading_style,
+            experience=experience,
+            page_border=page_border,
+            contact_separator=str(value.get("contact_separator", base.contact_separator)),
+            name_alignment=str(value.get("name_alignment", base.name_alignment)),
+            contact_alignment=str(value.get("contact_alignment", base.contact_alignment)),
+        )
+    return default_document_structure()
 
 
 def _read_user_format(username: str, format_id: str) -> ResumeFormatSpec:
@@ -311,13 +661,16 @@ def create_format(
         payload["name"] = clean_name
         payload["protected"] = False
         payload["source"] = source
-        # Keep only known fields.
+        if "structure" in payload:
+            payload["structure"] = _coerce_structure(payload["structure"])
         allowed = {f.name for f in fields(ResumeFormatSpec)}
         payload = {k: v for k, v in payload.items() if k in allowed}
         spec = ResumeFormatSpec(**payload)
 
     spec.protected = False
     spec.source = source
+    if not isinstance(spec.structure, DocumentStructure):
+        spec.structure = _coerce_structure(spec.structure)
     path = _format_path(key, spec.id)
     path.write_text(format_spec_to_xml(spec), encoding="utf-8")
 
@@ -354,11 +707,15 @@ def update_format(
             payload["name"] = name.strip() or existing.name
         payload["id"] = format_id
         payload["protected"] = False
+        if "structure" in payload:
+            payload["structure"] = _coerce_structure(payload["structure"])
         allowed = {f.name for f in fields(ResumeFormatSpec)}
         payload = {k: v for k, v in payload.items() if k in allowed}
         updated = ResumeFormatSpec(**payload)
 
     updated.protected = False
+    if not isinstance(updated.structure, DocumentStructure):
+        updated.structure = _coerce_structure(updated.structure)
     path = _format_path(key, format_id)
     path.write_text(format_spec_to_xml(updated), encoding="utf-8")
     return updated
@@ -398,11 +755,326 @@ def get_primary_format(username: str) -> ResumeFormatSpec:
         return default_format_spec()
 
 
+def _normalize_heading_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip()).casefold()
+
+
+def _match_section_key(heading_text: str) -> Optional[str]:
+    normalized = _normalize_heading_text(heading_text)
+    for key, aliases in _SECTION_ALIASES.items():
+        if normalized in aliases:
+            return key
+    # Prefix match for headings like "WORK EXPERIENCE (SELECTED)"
+    for key, aliases in _SECTION_ALIASES.items():
+        for alias in aliases:
+            if normalized.startswith(alias):
+                return key
+    return None
+
+
+def _paragraph_has_bottom_border(paragraph) -> bool:
+    try:
+        from docx.oxml.ns import qn
+    except ImportError:
+        return False
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return False
+    p_bdr = p_pr.find(qn("w:pBdr"))
+    if p_bdr is None:
+        return False
+    bottom = p_bdr.find(qn("w:bottom"))
+    if bottom is None:
+        return False
+    val = bottom.get(qn("w:val")) or ""
+    return val not in {"", "nil", "none"}
+
+
+def _read_bottom_border(paragraph) -> Optional[SeparatorStyle]:
+    try:
+        from docx.oxml.ns import qn
+    except ImportError:
+        return None
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return None
+    p_bdr = p_pr.find(qn("w:pBdr"))
+    if p_bdr is None:
+        return None
+    bottom = p_bdr.find(qn("w:bottom"))
+    if bottom is None:
+        return None
+    val = bottom.get(qn("w:val")) or "single"
+    if val in {"nil", "none"}:
+        return None
+    try:
+        sz = int(bottom.get(qn("w:sz")) or "2")
+    except ValueError:
+        sz = 2
+    try:
+        space = int(bottom.get(qn("w:space")) or "1")
+    except ValueError:
+        space = 1
+    color = bottom.get(qn("w:color")) or "AAAAAA"
+    return SeparatorStyle(enabled=True, val=val, sz=sz, space=space, color=color)
+
+
+def _looks_like_section_heading(paragraph, *, body_size: int) -> bool:
+    text = paragraph.text.strip()
+    if not text or len(text) > 48 or "\n" in text:
+        return False
+    if _match_section_key(text):
+        return True
+    # Short bold / larger / ALL-CAPS lines are likely headings.
+    runs = [r for r in paragraph.runs if r.text and r.text.strip()]
+    if not runs:
+        return False
+    boldish = any(bool(r.bold) for r in runs)
+    sizes = []
+    for run in runs:
+        if run.font.size is not None:
+            sizes.append(int(round(run.font.size.pt)))
+    larger = any(s >= body_size + 1 for s in sizes)
+    mostly_upper = text == text.upper() and any(c.isalpha() for c in text)
+    word_count = len(text.split())
+    return word_count <= 6 and (boldish or larger or mostly_upper)
+
+
+def _extract_page_border(section) -> PageBorderStyle:
+    try:
+        from docx.oxml.ns import qn
+    except ImportError:
+        return PageBorderStyle(enabled=False)
+
+    sect_pr = section._sectPr
+    if sect_pr is None:
+        return PageBorderStyle(enabled=False)
+    pg_borders = sect_pr.find(qn("w:pgBorders"))
+    if pg_borders is None:
+        return PageBorderStyle(enabled=False)
+
+    sides: list[str] = []
+    sample = None
+    for side in ("top", "left", "bottom", "right"):
+        el = pg_borders.find(qn(f"w:{side}"))
+        if el is None:
+            continue
+        val = el.get(qn("w:val")) or ""
+        if val in {"", "nil", "none"}:
+            continue
+        sides.append(side)
+        if sample is None:
+            sample = el
+    if not sides or sample is None:
+        return PageBorderStyle(enabled=False)
+    try:
+        sz = int(sample.get(qn("w:sz")) or "4")
+    except ValueError:
+        sz = 4
+    try:
+        space = int(sample.get(qn("w:space")) or "24")
+    except ValueError:
+        space = 24
+    return PageBorderStyle(
+        enabled=True,
+        val=sample.get(qn("w:val")) or "single",
+        sz=sz,
+        space=space,
+        color=sample.get(qn("w:color")) or "000000",
+        sides=tuple(sides),
+    )
+
+
+def _extract_experience_layout(document) -> ExperienceLayout:
+    layout = ExperienceLayout()
+    try:
+        from docx.oxml.ns import qn
+    except ImportError:
+        return layout
+
+    for table in document.tables:
+        if len(table.columns) != 2 or not table.rows:
+            continue
+        row = table.rows[0]
+        if len(row.cells) < 2:
+            continue
+        left_text = row.cells[0].text.strip()
+        right_text = row.cells[1].text.strip()
+        if not left_text:
+            continue
+        # Prefer tables that look like company | duration.
+        looks_dated = bool(re.search(r"\d{4}|present|current", right_text, re.IGNORECASE))
+        if not looks_dated and len(right_text) > 40:
+            continue
+
+        widths: list[float] = []
+        for cell in row.cells[:2]:
+            tc_pr = cell._tc.tcPr
+            width_in = None
+            if tc_pr is not None:
+                tc_w = tc_pr.first_child_found_in("w:tcW")
+                if tc_w is not None:
+                    try:
+                        width_in = int(tc_w.get(qn("w:w")) or "0") / 1440.0
+                    except ValueError:
+                        width_in = None
+            widths.append(width_in if width_in and width_in > 0 else 0.0)
+
+        if widths[0] > 0 and widths[1] > 0:
+            layout.left_width_in = round(widths[0], 2)
+            layout.right_width_in = round(widths[1], 2)
+        layout.company_line_mode = "two_column_table"
+
+        # Detect bold on left/right runs.
+        left_bold = any(bool(r.bold) for p in row.cells[0].paragraphs for r in p.runs)
+        right_bold = any(bool(r.bold) for p in row.cells[1].paragraphs for r in p.runs)
+        layout.company_bold = left_bold if row.cells[0].paragraphs else True
+        layout.duration_bold = right_bold if row.cells[1].paragraphs else True
+
+        right_align = "right"
+        for paragraph in row.cells[1].paragraphs:
+            align = paragraph.alignment
+            if align is not None:
+                # WD_ALIGN_PARAGRAPH.RIGHT == 2
+                right_align = "right" if int(align) == 2 else "left" if int(align) == 0 else "center"
+                break
+        layout.duration_align = right_align
+        return layout
+
+    # Fallback: pipe/tab single-line company layouts still use two-column emission.
+    layout.company_line_mode = "two_column_table"
+    return layout
+
+
+def _extract_structure_from_document(document, *, body_size: int) -> DocumentStructure:
+    structure = default_document_structure()
+    sections: list[SectionRule] = []
+    seen_keys: set[str] = set()
+    separator: Optional[SeparatorStyle] = None
+    pending_separator = False
+    order = 0
+
+    # Walk block items so we can associate separators with following headings.
+    for block in document.element.body:
+        tag = block.tag.split("}")[-1] if "}" in block.tag else block.tag
+        if tag != "p":
+            continue
+        # Resolve python-docx paragraph wrapper
+        paragraph = None
+        for candidate in document.paragraphs:
+            if candidate._p is block:
+                paragraph = candidate
+                break
+        if paragraph is None:
+            continue
+
+        if _paragraph_has_bottom_border(paragraph) and not paragraph.text.strip():
+            pending_separator = True
+            border = _read_bottom_border(paragraph)
+            if border is not None:
+                separator = border
+            continue
+
+        if not _looks_like_section_heading(paragraph, body_size=body_size):
+            # A heading paragraph may itself carry a bottom border as the rule.
+            if _paragraph_has_bottom_border(paragraph):
+                border = _read_bottom_border(paragraph)
+                if border is not None:
+                    separator = border
+            continue
+
+        heading_text = paragraph.text.strip()
+        key = _match_section_key(heading_text)
+        if key is None:
+            # Unknown heading — keep label under a synthetic key for persistence.
+            key = re.sub(r"[^a-z0-9]+", "_", heading_text.casefold()).strip("_") or f"section_{order}"
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        sections.append(
+            SectionRule(
+                key=key,
+                heading=heading_text,
+                separator_before=pending_separator or _paragraph_has_bottom_border(paragraph),
+                order=order,
+            )
+        )
+        order += 1
+        pending_separator = False
+
+        # Capture heading spacing from the first matched heading.
+        if order == 1:
+            pf = paragraph.paragraph_format
+            before = pf.space_before.pt if pf.space_before is not None else structure.heading_style.space_before_pt
+            after = pf.space_after.pt if pf.space_after is not None else structure.heading_style.space_after_pt
+            run_list = list(paragraph.runs)
+            bold = any(bool(r.bold) for r in run_list) if run_list else True
+            alignment = "left"
+            if paragraph.alignment is not None:
+                align_map = {0: "left", 1: "center", 2: "right", 3: "justify"}
+                alignment = align_map.get(int(paragraph.alignment), "left")
+            structure.heading_style = HeadingStyle(
+                bold=bool(bold),
+                space_before_pt=float(before),
+                space_after_pt=float(after),
+                alignment=alignment,
+            )
+
+    if sections:
+        # Fill in any missing canonical sections using default labels, appended.
+        for default_sec in default_document_structure().sections:
+            if default_sec.key not in seen_keys:
+                sections.append(
+                    SectionRule(
+                        key=default_sec.key,
+                        heading=default_sec.heading,
+                        separator_before=True,
+                        order=len(sections),
+                    )
+                )
+        structure.sections = sections
+    if separator is not None:
+        structure.separator = separator
+    elif any(s.separator_before for s in structure.sections):
+        structure.separator = SeparatorStyle(enabled=True)
+    else:
+        structure.separator = SeparatorStyle(enabled=False)
+
+    structure.experience = _extract_experience_layout(document)
+    if document.sections:
+        structure.page_border = _extract_page_border(document.sections[0])
+    return structure
+
+
+def _effective_run_font_name(run) -> Optional[str]:
+    """Return the concrete font name on a run, including theme/ascii fallbacks."""
+    name = run.font.name
+    if name:
+        return name
+    try:
+        from docx.oxml.ns import qn
+
+        r_pr = run._element.rPr
+        if r_pr is None:
+            return None
+        r_fonts = r_pr.rFonts
+        if r_fonts is None:
+            return None
+        for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+            value = r_fonts.get(qn(attr))
+            if value:
+                return value
+    except Exception:
+        return None
+    return None
+
+
 def extract_format_from_docx(docx_path: str | Path, *, name: str = "") -> ResumeFormatSpec:
     """Inspect a .docx and build a ResumeFormatSpec (not yet saved).
 
-    Extracts page size/margins from the first section and typography hints from
-    document styles / early paragraphs. Missing values fall back to defaults.
+    Extracts page size/margins, typography hints, and structural rules
+    (section headings, separators, experience layout, page borders).
+    Missing values fall back to defaults.
     """
     path = Path(docx_path).expanduser()
     if not path.is_file():
@@ -426,7 +1098,7 @@ def extract_format_from_docx(docx_path: str | Path, *, name: str = "") -> Resume
         except Exception:
             return default
 
-    font_name = DEFAULT_FORMAT_VALUES["font_name"]
+    font_name: Optional[str] = None
     body_size = DEFAULT_FORMAT_VALUES["body_size"]
     name_size = DEFAULT_FORMAT_VALUES["name_size"]
     heading_size = DEFAULT_FORMAT_VALUES["heading_size"]
@@ -440,28 +1112,47 @@ def extract_format_from_docx(docx_path: str | Path, *, name: str = "") -> Resume
     except Exception:
         pass
 
-    # Scan early runs for the largest bold size (likely the name) and mid sizes (headings).
+    # Scan early runs for fonts and sizes. Real run fonts must win over the
+    # default / Normal fallback (previously `font_name = font_name or run.font.name`
+    # left Arial stuck once the default was assigned).
     sizes: list[int] = []
     bold_sizes: list[int] = []
-    for paragraph in document.paragraphs[:40]:
+    run_fonts: list[str] = []
+    for paragraph in document.paragraphs[:80]:
         for run in paragraph.runs:
-            if run.font.name:
-                font_name = font_name or run.font.name
+            run_font = _effective_run_font_name(run)
+            if run_font:
+                run_fonts.append(run_font)
+                font_name = run_font
             if run.font.size is not None:
                 pt = int(round(run.font.size.pt))
                 sizes.append(pt)
                 if run.bold:
                     bold_sizes.append(pt)
 
+    if run_fonts:
+        # Prefer the most common explicit run font.
+        font_name = max(set(run_fonts), key=run_fonts.count)
+
     if bold_sizes:
         name_size = max(bold_sizes)
     if sizes:
-        # Heading ≈ median of sizes above body; body ≈ most common / Normal.
         above_body = [s for s in sizes if s > body_size]
         if above_body:
             heading_size = sorted(above_body)[len(above_body) // 2]
         if not bold_sizes:
             name_size = max(sizes)
+
+    structure = _extract_structure_from_document(document, body_size=body_size)
+
+    # Infer line spacing from Normal style when available.
+    line_spacing = DEFAULT_FORMAT_VALUES["line_spacing"]
+    try:
+        normal = document.styles["Normal"]
+        if normal.paragraph_format.line_spacing is not None:
+            line_spacing = float(normal.paragraph_format.line_spacing)
+    except Exception:
+        pass
 
     display_name = name.strip() or path.stem
     return ResumeFormatSpec(
@@ -479,7 +1170,8 @@ def extract_format_from_docx(docx_path: str | Path, *, name: str = "") -> Resume
         margin_left_in=inches(section.left_margin, DEFAULT_FORMAT_VALUES["margin_left_in"]),
         header_distance_in=inches(section.header_distance, DEFAULT_FORMAT_VALUES["header_distance_in"]),
         footer_distance_in=inches(section.footer_distance, DEFAULT_FORMAT_VALUES["footer_distance_in"]),
-        line_spacing=DEFAULT_FORMAT_VALUES["line_spacing"],
+        line_spacing=line_spacing,
+        structure=structure,
         protected=False,
         source="docx",
     )
