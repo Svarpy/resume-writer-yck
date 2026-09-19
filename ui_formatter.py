@@ -210,6 +210,9 @@ class FormatterPage(tk.Frame):
         dialog.geometry(f"+{x}+{y}")
 
         self.wait_window(dialog)
+        if hasattr(self.app, "_prune_tracked_widgets"):
+            self.app._prune_tracked_widgets()
+            self.app._apply_button_state()
         return result["value"]
 
     def _add_format(self) -> None:
