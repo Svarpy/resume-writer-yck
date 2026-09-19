@@ -21,6 +21,7 @@ from formats_store import (
     SeparatorStyle,
     default_document_structure,
     get_format_for_writer,
+    resolve_format_template_path,
 )
 import user_auth
 from user_auth import get_current_user
@@ -189,19 +190,24 @@ class ResumeFormat:
     footer_distance_in: float = DEFAULT_FORMAT_VALUES["footer_distance_in"]
     line_spacing: float = DEFAULT_FORMAT_VALUES["line_spacing"]
     structure: DocumentStructure = field(default_factory=default_document_structure)
+    template_path: Optional[Path] = None
 
 
 def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
     """Build a ResumeFormat from the user's primary format (or app default).
 
-    Safe fallback: any store/auth error yields the protected default values.
-    Returns the full primary structure + page setup via ``to_writer_kwargs``.
+    When the primary format was uploaded from Word, ``template_path`` points at
+    the stored package so generate can clone it.
     """
     try:
-        resolved_user = username if username is not None else get_current_user()
-        spec = get_format_for_writer(resolved_user)
-        # ResumeFormat is frozen — construct in one shot (do not mutate fields).
-        return ResumeFormat(**spec.to_writer_kwargs())
+        user = username if username is not None else get_current_user()
+        spec = get_format_for_writer(user)
+        kwargs = spec.to_writer_kwargs()
+        if user:
+            template = resolve_format_template_path(user, spec)
+            if template is not None:
+                kwargs["template_path"] = template
+        return ResumeFormat(**kwargs)
     except Exception:
         return ResumeFormat()
 
@@ -459,10 +465,18 @@ def add_skill_line(document: Document, line: str, fmt: ResumeFormat) -> None:
 
 
 def add_bullet(document: Document, text: str, fmt: ResumeFormat, *, normalize_dash: bool = False) -> None:
-    paragraph = document.add_paragraph(style="List Bullet")
-    format_paragraph(paragraph, before=2, after=2, alignment=WD_ALIGN_PARAGRAPH.JUSTIFY)
     if normalize_dash:
         text = normalize_experience_bullet_text(text)
+    # Template packages (e.g. YcKResume) may omit the built-in List Bullet style.
+    style_name = "List Bullet"
+    try:
+        _ = document.styles[style_name]
+        paragraph = document.add_paragraph(style=style_name)
+    except KeyError:
+        paragraph = document.add_paragraph()
+        marker = getattr(fmt.structure.experience, "bullet_marker", None) or "•"
+        text = f"{marker}\t{text}"
+    format_paragraph(paragraph, before=2, after=2, alignment=WD_ALIGN_PARAGRAPH.JUSTIFY)
     add_text_run(paragraph, text, fmt)
 
 
@@ -552,6 +566,15 @@ def add_tabbed_line(document: Document, left_text: str, right_text: str, fmt: Re
             add_text_run(paragraph, f"  {right_text.strip()}", fmt, bold=experience.duration_bold)
         return
 
+    if experience.company_line_mode == "tabbed_line":
+        paragraph = document.add_paragraph()
+        format_paragraph(paragraph, before=2, after=2, alignment=WD_ALIGN_PARAGRAPH.LEFT, line_spacing=fmt.line_spacing)
+        _ensure_right_tab(paragraph, int(getattr(experience, "tab_pos_twips", 9200) or 9200))
+        add_text_run(paragraph, left_text.strip(), fmt, bold=experience.company_bold)
+        if right_text.strip():
+            add_text_run(paragraph, "\t" + right_text.strip(), fmt, bold=experience.duration_bold)
+        return
+
     left_w = float(experience.left_width_in) or 4.45
     right_w = float(experience.right_width_in) or 2.55
     table = document.add_table(rows=1, cols=2)
@@ -580,6 +603,20 @@ def add_tabbed_line(document: Document, left_text: str, right_text: str, fmt: Re
     )
     if right_text.strip():
         add_text_run(right_paragraph, right_text.strip(), fmt, bold=experience.duration_bold)
+
+
+def _ensure_right_tab(paragraph, pos_twips: int) -> None:
+    p_pr = paragraph._p.get_or_add_pPr()
+    tabs = p_pr.find(qn("w:tabs"))
+    if tabs is None:
+        tabs = OxmlElement("w:tabs")
+        p_pr.append(tabs)
+    for existing in list(tabs):
+        tabs.remove(existing)
+    tab = OxmlElement("w:tab")
+    tab.set(qn("w:val"), "right")
+    tab.set(qn("w:pos"), str(int(pos_twips)))
+    tabs.append(tab)
 
 
 def strip_bullet_marker(line: str) -> str:
@@ -717,16 +754,33 @@ def apply_page_border(document: Document, border: PageBorderStyle) -> None:
 
 
 def build_resume(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -> Path:
+    """Generate a resume DOCX.
+
+    When ``fmt.template_path`` points at a preserved uploaded template, clone that
+    package and inject Writer content. Otherwise use the historical default path.
+    """
+    if fmt.template_path and Path(fmt.template_path).is_file():
+        from template_resume import build_resume_from_template
+
+        return build_resume_from_template(content, fmt, output_path)
+    return _build_resume_heuristic(content, fmt, output_path)
+
+
+def _build_resume_heuristic(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -> Path:
     load_docx_dependencies()
     document = Document()
     apply_document_defaults(document, fmt)
-    structure = fmt.structure or default_document_structure()
+    _populate_resume_body_for_template(document, content, fmt, prototypes=None)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document.save(output_path)
+    return output_path
 
-    core = document.core_properties
-    core.author = content.name or AUTHOR_NAME
-    core.subject = "my resume"
-    core.keywords = ", ".join(split_keywords(content.top_skills))
-    core.title = f"{content.name or AUTHOR_NAME} Resume"
+
+def _populate_resume_body_for_template(document, content: ResumeContent, fmt: ResumeFormat, *, prototypes=None) -> None:
+    """Shared body writer used by heuristic and template-preserving generate paths."""
+    from template_resume import clone_heading, clone_separator
+
+    structure = fmt.structure or default_document_structure()
 
     name_paragraph = document.add_paragraph()
     format_paragraph(
@@ -769,7 +823,6 @@ def build_resume(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -
         renderer = section_renderers.get(key)
         if renderer is None:
             continue
-        # Skip empty optional sections.
         if key == "education" and not content.education_entries:
             continue
         if key == "certifications" and not content.certifications.strip():
@@ -777,14 +830,17 @@ def build_resume(content: ResumeContent, fmt: ResumeFormat, output_path: Path) -
         rule = structure.section_for(key)
         heading = rule.heading if rule is not None else key.upper()
         separator_before = rule.separator_before if rule is not None else True
-        if separator_before:
-            add_border_rule(document, fmt)
-        add_section_heading(document, heading, fmt)
+        if separator_before and structure.separator.enabled:
+            if prototypes is not None:
+                clone_separator(document, prototypes, fmt)
+            else:
+                add_border_rule(document, fmt)
+        if prototypes is not None:
+            clone_heading(document, heading, prototypes, fmt)
+        else:
+            add_section_heading(document, heading, fmt)
         renderer()
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(output_path)
-    return output_path
 
 
 def _render_summary_section(document: Document, content: ResumeContent, fmt: ResumeFormat) -> None:

@@ -113,14 +113,17 @@ class HeadingStyle:
 class ExperienceLayout:
     """How company / role / duration lines are composed in WORK EXPERIENCE."""
 
-    company_line_mode: str = "two_column_table"  # two_column_table | single_line
+    # two_column_table | tabbed_line | single_line
+    company_line_mode: str = "two_column_table"
     left_width_in: float = 4.45
     right_width_in: float = 2.55
+    tab_pos_twips: int = 9200
     company_bold: bool = True
     duration_bold: bool = True
     duration_align: str = "right"
     role_below_company: bool = True
     bullets_under_role: bool = True
+    bullet_marker: str = "•"
 
 
 @dataclass
@@ -385,11 +388,13 @@ def _structure_to_xml(parent: ET.Element, structure: DocumentStructure) -> None:
     ET.SubElement(exp, "companyLineMode").text = structure.experience.company_line_mode
     ET.SubElement(exp, "leftWidthIn").text = str(structure.experience.left_width_in)
     ET.SubElement(exp, "rightWidthIn").text = str(structure.experience.right_width_in)
+    ET.SubElement(exp, "tabPosTwips").text = str(int(structure.experience.tab_pos_twips))
     ET.SubElement(exp, "companyBold").text = "true" if structure.experience.company_bold else "false"
     ET.SubElement(exp, "durationBold").text = "true" if structure.experience.duration_bold else "false"
     ET.SubElement(exp, "durationAlign").text = structure.experience.duration_align
     ET.SubElement(exp, "roleBelowCompany").text = "true" if structure.experience.role_below_company else "false"
     ET.SubElement(exp, "bulletsUnderRole").text = "true" if structure.experience.bullets_under_role else "false"
+    ET.SubElement(exp, "bulletMarker").text = structure.experience.bullet_marker
 
     border = ET.SubElement(root, "pageBorder")
     ET.SubElement(border, "enabled").text = "true" if structure.page_border.enabled else "false"
@@ -471,6 +476,9 @@ def _structure_from_xml(root: ET.Element) -> DocumentStructure:
         right_width_in=_require_float(_text(exp_el, "rightWidthIn", str(base.experience.right_width_in)), "rightWidthIn")
         if exp_el is not None
         else base.experience.right_width_in,
+        tab_pos_twips=_require_int(_text(exp_el, "tabPosTwips", str(base.experience.tab_pos_twips)), "tabPosTwips")
+        if exp_el is not None
+        else base.experience.tab_pos_twips,
         company_bold=_bool_text(_text(exp_el, "companyBold", "true"), True) if exp_el is not None else base.experience.company_bold,
         duration_bold=_bool_text(_text(exp_el, "durationBold", "true"), True) if exp_el is not None else base.experience.duration_bold,
         duration_align=_text(exp_el, "durationAlign", base.experience.duration_align)
@@ -482,6 +490,11 @@ def _structure_from_xml(root: ET.Element) -> DocumentStructure:
         bullets_under_role=_bool_text(_text(exp_el, "bulletsUnderRole", "true"), True)
         if exp_el is not None
         else base.experience.bullets_under_role,
+        bullet_marker=(
+            (_text(exp_el, "bulletMarker", base.experience.bullet_marker) or base.experience.bullet_marker)
+            if exp_el is not None
+            else base.experience.bullet_marker
+        ),
     )
 
     border_el = structure_el.find("pageBorder")
@@ -824,6 +837,8 @@ def update_format(
     updated.protected = False
     if not isinstance(updated.structure, DocumentStructure):
         updated.structure = _coerce_structure(updated.structure)
+    if not updated.template_file and existing.template_file:
+        updated.template_file = existing.template_file
     path = _format_path(key, format_id)
     path.write_text(format_spec_to_xml(updated), encoding="utf-8")
     return updated
@@ -836,6 +851,18 @@ def delete_format(username: str, format_id: str) -> None:
     path = _format_path(key, format_id)
     if not path.is_file():
         raise FormatNotFoundError(f"Format '{format_id}' not found")
+
+    try:
+        existing = _read_user_format(key, format_id)
+        template_path = resolve_format_template_path(key, existing)
+        if template_path is not None and template_path.is_file():
+            template_path.unlink()
+    except FormatError:
+        pass
+    conventional = format_template_path(key, format_id)
+    if conventional.is_file():
+        conventional.unlink()
+
     path.unlink()
 
     # If this was the primary, fall back to default.
@@ -1075,7 +1102,39 @@ def _extract_experience_layout(document) -> ExperienceLayout:
         layout.duration_align = right_align
         return layout
 
-    # Fallback: pipe/tab single-line company layouts still use two-column emission.
+    # YcKResume / YcKResumeFTR2: company|location \t duration with a right tab stop.
+    for paragraph in document.paragraphs:
+        raw = paragraph.text
+        if "\t" not in raw:
+            continue
+        if not re.search(r"\d{4}|present|current", raw, re.IGNORECASE):
+            continue
+        p_pr = paragraph._p.pPr
+        tab_pos = None
+        if p_pr is not None:
+            tabs_el = p_pr.find(qn("w:tabs"))
+            if tabs_el is not None:
+                for tab in tabs_el:
+                    if (tab.get(qn("w:val")) or "") == "right":
+                        try:
+                            tab_pos = int(tab.get(qn("w:pos")) or "0")
+                        except ValueError:
+                            tab_pos = None
+                        if tab_pos:
+                            break
+        layout.company_line_mode = "tabbed_line"
+        layout.duration_align = "right"
+        if tab_pos and tab_pos > 0:
+            layout.tab_pos_twips = tab_pos
+        layout.company_bold = any(bool(r.bold) for r in paragraph.runs) or True
+        for para in document.paragraphs:
+            t = para.text.strip()
+            m = re.match(r"^([•▸●○\-–—*])\s*\t?\s*\S", t)
+            if m:
+                layout.bullet_marker = m.group(1)
+                break
+        return layout
+
     layout.company_line_mode = "two_column_table"
     return layout
 
@@ -1086,14 +1145,22 @@ def _extract_structure_from_document(document, *, body_size: int) -> DocumentStr
     seen_keys: set[str] = set()
     separator: Optional[SeparatorStyle] = None
     pending_separator = False
+    separator_block_index = -1
     order = 0
+    heading_entries: list[tuple[SectionRule, int]] = []
 
-    # Walk block items so we can associate separators with following headings.
-    for block in document.element.body:
+    body_blocks = list(document.element.body)
+    for block_index, block in enumerate(body_blocks):
         tag = block.tag.split("}")[-1] if "}" in block.tag else block.tag
+        if tag == "tbl" and structure.experience_table_index < 0:
+            for table in document.tables:
+                if table._tbl is block and len(table.columns) == 2:
+                    structure.experience_table_index = block_index
+                    break
+            continue
         if tag != "p":
             continue
-        # Resolve python-docx paragraph wrapper
+
         paragraph = None
         for candidate in document.paragraphs:
             if candidate._p is block:
@@ -1107,38 +1174,40 @@ def _extract_structure_from_document(document, *, body_size: int) -> DocumentStr
             border = _read_bottom_border(paragraph)
             if border is not None:
                 separator = border
+                if separator_block_index < 0:
+                    separator_block_index = block_index
             continue
 
         if not _looks_like_section_heading(paragraph, body_size=body_size):
-            # A heading paragraph may itself carry a bottom border as the rule.
             if _paragraph_has_bottom_border(paragraph):
                 border = _read_bottom_border(paragraph)
                 if border is not None:
                     separator = border
+                    if separator_block_index < 0:
+                        separator_block_index = block_index
             continue
 
         heading_text = paragraph.text.strip()
         key = _match_section_key(heading_text)
         if key is None:
-            # Unknown heading — keep label under a synthetic key for persistence.
-            # Generation remaps known phrases (e.g. professional_experience → experience).
             key = re.sub(r"[^a-z0-9]+", "_", heading_text.casefold()).strip("_") or f"section_{order}"
-            key = canonicalize_section_key(key, heading_text)
+        key = canonicalize_section_key(key, heading_text)
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        sections.append(
-            SectionRule(
-                key=key,
-                heading=heading_text,
-                separator_before=pending_separator or _paragraph_has_bottom_border(paragraph),
-                order=order,
-            )
+        rule = SectionRule(
+            key=key,
+            heading=heading_text,
+            separator_before=pending_separator or _paragraph_has_bottom_border(paragraph),
+            order=order,
+            template_block_index=block_index,
+            content_start_index=block_index + 1,
         )
+        sections.append(rule)
+        heading_entries.append((rule, block_index))
         order += 1
         pending_separator = False
 
-        # Capture heading spacing from the first matched heading.
         if order == 1:
             pf = paragraph.paragraph_format
             before = pf.space_before.pt if pf.space_before is not None else structure.heading_style.space_before_pt
@@ -1156,25 +1225,39 @@ def _extract_structure_from_document(document, *, body_size: int) -> DocumentStr
                 alignment=alignment,
             )
 
+    for idx, (rule, _heading_idx) in enumerate(heading_entries):
+        end_idx = len(body_blocks) - 1
+        next_boundary = heading_entries[idx + 1][1] if idx + 1 < len(heading_entries) else end_idx
+        rule.content_end_index = next_boundary
+
+    template_had_separators = separator is not None or any(s.separator_before for s in sections)
     if sections:
-        # Fill in any missing canonical sections using default labels, appended.
         for default_sec in default_document_structure().sections:
             if default_sec.key not in seen_keys:
                 sections.append(
                     SectionRule(
                         key=default_sec.key,
                         heading=default_sec.heading,
-                        separator_before=True,
+                        separator_before=bool(template_had_separators),
                         order=len(sections),
                     )
                 )
         structure.sections = sections
+
+    structure.separator_block_index = separator_block_index
     if separator is not None:
         structure.separator = separator
-    elif any(s.separator_before for s in structure.sections):
+    elif template_had_separators:
         structure.separator = SeparatorStyle(enabled=True)
     else:
         structure.separator = SeparatorStyle(enabled=False)
+
+    if len(document.paragraphs) >= 2:
+        contact_text = document.paragraphs[1].text
+        if " · " in contact_text or "·" in contact_text:
+            structure.contact_separator = "   ·   "
+        elif "|" in contact_text:
+            structure.contact_separator = "  |  "
 
     structure.experience = _extract_experience_layout(document)
     if document.sections:
@@ -1320,15 +1403,36 @@ def add_format_from_docx(
     *,
     set_as_primary: bool = False,
 ) -> ResumeFormatSpec:
-    """Add Format flow: extract structure from a Word file and save under ``name``."""
-    extracted = extract_format_from_docx(docx_path, name=name)
-    return create_format(
-        username,
+    """Add Format flow: extract structure, store the source ``.docx``, save under ``name``.
+
+    The uploaded Word package is copied beside the format XML so generate can
+    clone it (template-preserving path) instead of approximating layout.
+    """
+    key = sanitize_username(username)
+    source_path = Path(docx_path).expanduser()
+    extracted = extract_format_from_docx(source_path, name=name)
+    spec = create_format(
+        key,
         name,
         xml_text=format_spec_to_xml(extracted),
         source="docx",
         set_as_primary=set_as_primary,
     )
+
+    template_name = _template_filename(spec.id)
+    dest = user_formats_dir(key) / template_name
+    try:
+        shutil.copy2(source_path, dest)
+    except OSError as exc:
+        try:
+            delete_format(key, spec.id)
+        except FormatError:
+            pass
+        raise FormatValidationError(f"Could not store template document: {exc}") from exc
+
+    spec.template_file = template_name
+    _format_path(key, spec.id).write_text(format_spec_to_xml(spec), encoding="utf-8")
+    return spec
 
 
 def get_format_for_writer(username: Optional[str] = None) -> ResumeFormatSpec:

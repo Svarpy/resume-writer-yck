@@ -412,7 +412,7 @@ class WriterStructureApplyTests(unittest.TestCase):
 class PrimaryFormatApplyFromReferenceTests(unittest.TestCase):
     """Regression: real PM reference docx → primary → build_resume ≠ default."""
 
-    FIXTURE = Path(__file__).resolve().parent / "tests" / "fixtures" / "YcKResume.docx"
+    FIXTURE = Path(__file__).resolve().parent / "tests" / "fixtures" / "formats" / "YcKResume.docx"
 
     def setUp(self) -> None:
         if get_current_user() != "refapplyuser":
