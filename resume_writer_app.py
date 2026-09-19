@@ -12,6 +12,9 @@ os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+from formats_store import DEFAULT_FORMAT_VALUES, get_format_for_writer
+from user_auth import get_current_user
+
 
 AUTHOR_NAME = "Yashashchandra Kollu"
 EMAIL = "yashashchandrakollu1@gmail.com"
@@ -155,10 +158,24 @@ def load_docx_dependencies() -> None:
 
 @dataclass(frozen=True)
 class ResumeFormat:
-    font_name: str = "Arial"
-    name_size: int = 16
-    heading_size: int = 12
-    body_size: int = 11
+    font_name: str = DEFAULT_FORMAT_VALUES["font_name"]
+    name_size: int = DEFAULT_FORMAT_VALUES["name_size"]
+    heading_size: int = DEFAULT_FORMAT_VALUES["heading_size"]
+    body_size: int = DEFAULT_FORMAT_VALUES["body_size"]
+
+
+def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
+    """Build a ResumeFormat from the user's primary format (or app default).
+
+    Safe fallback: any store/auth error yields the protected default values.
+    The Formatter UI still controls generation via its own widgets; App can call
+    this when wiring login / primary-format selection into generate.
+    """
+    try:
+        spec = get_format_for_writer(username if username is not None else get_current_user())
+        return ResumeFormat(**spec.to_writer_kwargs())
+    except Exception:
+        return ResumeFormat()
 
 
 @dataclass(frozen=True)
@@ -684,10 +701,10 @@ class ResumeWriterApp(tk.Tk):
         self.minsize(860, 700)
 
         self.dark_mode_var = tk.BooleanVar(value=True)
-        self.font_var = tk.StringVar(value="Arial")
-        self.name_size_var = tk.StringVar(value="16")
-        self.heading_size_var = tk.StringVar(value="12")
-        self.body_size_var = tk.StringVar(value="11")
+        self.font_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["font_name"]))
+        self.name_size_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["name_size"]))
+        self.heading_size_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["heading_size"]))
+        self.body_size_var = tk.StringVar(value=str(DEFAULT_FORMAT_VALUES["body_size"]))
         self.output_dir_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.output_name_part_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR / default_output_filename_for()))
