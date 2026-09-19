@@ -369,5 +369,144 @@ class WriterStructureApplyTests(unittest.TestCase):
             self.assertGreater(left_w, right_w)
 
 
+    def test_synthetic_section_keys_map_to_renderers(self) -> None:
+        from formats_store import DocumentStructure, SectionRule, canonicalize_section_key
+        from resume_writer_app import ResumeContent, ResumeFormat, build_resume, load_docx_dependencies
+
+        self.assertEqual(canonicalize_section_key("professional_experience"), "experience")
+        structure = DocumentStructure(
+            sections=[
+                SectionRule("summary", "SUMMARY", True, 0),
+                SectionRule("skills", "SKILLS", True, 1),
+                SectionRule("professional_experience", "PROFESSIONAL EXPERIENCE", True, 2),
+                SectionRule("education", "EDUCATION", True, 3),
+                SectionRule("certifications", "Certifications", True, 4),
+            ]
+        )
+        self.assertEqual(structure.ordered_content_keys()[2], "experience")
+        self.assertEqual(structure.section_for("experience").heading, "PROFESSIONAL EXPERIENCE")
+
+        load_docx_dependencies()
+        from docx import Document
+
+        content = ResumeContent(
+            name="Test User",
+            email="t@example.com",
+            phone="+1 555 0100",
+            location="Remote",
+            summary="Word " * 45,
+            skills="Python",
+            experience="Acme Corp | Remote\tJan 2020 – Present\nEngineer\n- Built",
+            certifications="",
+            top_skills="Python",
+            education_entries=(),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "synth.docx"
+            build_resume(content, ResumeFormat(structure=structure), out)
+            texts = [p.text.strip() for p in Document(str(out)).paragraphs if p.text.strip()]
+            self.assertIn("PROFESSIONAL EXPERIENCE", texts)
+            self.assertNotIn("WORK EXPERIENCE", texts)
+
+
+class PrimaryFormatApplyFromReferenceTests(unittest.TestCase):
+    """Regression: real PM reference docx → primary → build_resume ≠ default."""
+
+    FIXTURE = Path(__file__).resolve().parent / "tests" / "fixtures" / "YcKResume.docx"
+
+    def setUp(self) -> None:
+        if get_current_user() != "refapplyuser":
+            try:
+                signup("refapplyuser", "RefApply1")
+            except UserExistsError:
+                signin("refapplyuser", "RefApply1")
+
+    def test_primary_from_yckresume_differs_from_default_on_generate(self) -> None:
+        from formats_store import (
+            DEFAULT_FORMAT_VALUES,
+            add_format_from_docx,
+            default_format_spec,
+            get_primary_format,
+            set_primary_format,
+        )
+        from resume_writer_app import (
+            ResumeContent,
+            ResumeFormat,
+            build_resume,
+            load_docx_dependencies,
+            resume_format_from_store,
+        )
+
+        self.assertTrue(self.FIXTURE.is_file(), f"Missing fixture: {self.FIXTURE}")
+        load_docx_dependencies()
+        from docx import Document
+
+        default = default_format_spec()
+        saved = add_format_from_docx(
+            "refapplyuser",
+            self.FIXTURE,
+            "YcK Resume Primary",
+            set_as_primary=True,
+        )
+        primary = get_primary_format("refapplyuser")
+        self.assertEqual(primary.id, saved.id)
+        self.assertNotEqual(primary.id, "default")
+
+        # Template must differ from locked Default Application Format.
+        self.assertAlmostEqual(primary.margin_top_in, 0.5, places=2)
+        self.assertNotAlmostEqual(primary.margin_top_in, DEFAULT_FORMAT_VALUES["margin_top_in"], places=2)
+        exp_rule = primary.structure.section_for("experience")
+        self.assertIsNotNone(exp_rule)
+        self.assertEqual(exp_rule.heading, "Professional Experience")
+        self.assertNotEqual(exp_rule.heading, default.structure.section_for("experience").heading)
+
+        fmt = resume_format_from_store("refapplyuser")
+        self.assertAlmostEqual(fmt.margin_top_in, 0.5, places=2)
+        self.assertEqual(fmt.structure.section_for("experience").heading, "Professional Experience")
+
+        content = ResumeContent(
+            name="Yashashchandra Kollu",
+            email="y@example.com",
+            phone="+1 555 0100",
+            location="Remote",
+            summary="Word " * 45,
+            skills="Python: scripting\nWord: documents",
+            experience="Acme Corp | Remote\tJan 2020 – Present\nSoftware Engineer\n- Built things",
+            certifications="AWS CCP",
+            top_skills="Python, Word",
+            education_entries=("State University\tMay 2018 – May 2022",),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_out = Path(tmp) / "from_primary.docx"
+            default_out = Path(tmp) / "from_default.docx"
+            build_resume(content, fmt, custom_out)
+            build_resume(content, ResumeFormat(), default_out)
+
+            custom_doc = Document(str(custom_out))
+            default_doc = Document(str(default_out))
+            custom_texts = [p.text.strip() for p in custom_doc.paragraphs if p.text.strip()]
+            default_texts = [p.text.strip() for p in default_doc.paragraphs if p.text.strip()]
+
+            self.assertIn("Professional Experience", custom_texts)
+            self.assertNotIn("WORK EXPERIENCE", custom_texts)
+            self.assertIn("WORK EXPERIENCE", default_texts)
+            self.assertAlmostEqual(custom_doc.sections[0].top_margin.inches, 0.5, places=2)
+            self.assertAlmostEqual(default_doc.sections[0].top_margin.inches, 0.75, places=2)
+            self.assertNotAlmostEqual(
+                custom_doc.sections[0].top_margin.inches,
+                default_doc.sections[0].top_margin.inches,
+                places=2,
+            )
+
+            # Title-case Summary/Skills from the reference template must win.
+            self.assertIn("Summary", custom_texts)
+            self.assertIn("Skills", custom_texts)
+            self.assertNotEqual(custom_texts, default_texts)
+
+        set_primary_format("refapplyuser", "default")
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
