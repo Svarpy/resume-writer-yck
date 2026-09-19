@@ -12,29 +12,9 @@ os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-# Integ modules (auth + formats). Prefer real modules from the integ PR;
-# App UI imports these by shared module names.
-try:
-    from formats_store import DEFAULT_FORMAT_VALUES, get_format_for_writer
-except ImportError:  # pragma: no cover - until integ PR lands
-    DEFAULT_FORMAT_VALUES = {
-        "font_name": "Arial",
-        "name_size": 16,
-        "heading_size": 12,
-        "body_size": 11,
-    }
-
-    def get_format_for_writer(username=None):  # type: ignore[misc]
-        class _Spec:
-            def to_writer_kwargs(self):
-                return dict(DEFAULT_FORMAT_VALUES)
-
-        return _Spec()
-
-try:
-    import user_auth
-except ImportError:  # pragma: no cover - until integ PR lands
-    user_auth = None  # type: ignore[assignment]
+from formats_store import DEFAULT_FORMAT_VALUES, get_format_for_writer
+import user_auth
+from user_auth import get_current_user
 
 from docs_loader import load_how_to_use_section
 from ui_auth import AuthView
@@ -193,12 +173,12 @@ class ResumeFormat:
 
 
 def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
-    """Build a ResumeFormat from the user's primary format (or app default)."""
+    """Build a ResumeFormat from the user's primary format (or app default).
+
+    Safe fallback: any store/auth error yields the protected default values.
+    """
     try:
-        current = None
-        if user_auth is not None:
-            current = username if username is not None else user_auth.get_current_user()
-        spec = get_format_for_writer(current)
+        spec = get_format_for_writer(username if username is not None else get_current_user())
         return ResumeFormat(**spec.to_writer_kwargs())
     except Exception:
         return ResumeFormat()
@@ -758,7 +738,7 @@ class ResumeWriterApp(tk.Tk):
         self._bind_shortcuts()
         self._wire_validation()
 
-        if user_auth is not None and user_auth.get_current_user():
+        if user_auth.get_current_user():
             self._enter_authenticated_shell(user_auth.get_current_profile())
         else:
             self._show_auth()
@@ -830,8 +810,7 @@ class ResumeWriterApp(tk.Tk):
             self.shell.navigate("writer")
 
     def _logout(self) -> None:
-        if user_auth is not None:
-            user_auth.clear_session()
+        user_auth.clear_session()
         self._show_auth()
 
     def _show_page(self, page_key: str) -> None:
@@ -845,11 +824,10 @@ class ResumeWriterApp(tk.Tk):
             # Refresh profile fields without re-applying theme from disk every time
             # in a way that fights an in-progress toggle — load profile values only.
             try:
-                if user_auth is not None:
-                    profile = user_auth.get_current_profile()
-                    self.settings_page.username_var.set(profile.username)
-                    self.settings_page.display_name_var.set(profile.display_name)
-                    self.settings_page.email_var.set(profile.email)
+                profile = user_auth.get_current_profile()
+                self.settings_page.username_var.set(profile.username)
+                self.settings_page.display_name_var.set(profile.display_name)
+                self.settings_page.email_var.set(profile.email)
             except Exception:
                 pass
             if self.theme_toggle is not None:
