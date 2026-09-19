@@ -21,6 +21,7 @@ from formats_store import (
     SeparatorStyle,
     default_document_structure,
     get_format_for_writer,
+    normalize_line_spacing,
     resolve_format_template_path,
 )
 import user_auth
@@ -354,7 +355,7 @@ def set_run_font(run, font_name: str, size: int, bold: bool = False) -> None:
 def format_paragraph(paragraph, before: float = 0, after: float = 3, alignment=None, line_spacing: float = 1.0) -> None:
     paragraph.paragraph_format.space_before = Pt(before)
     paragraph.paragraph_format.space_after = Pt(after)
-    paragraph.paragraph_format.line_spacing = line_spacing
+    paragraph.paragraph_format.line_spacing = normalize_line_spacing(line_spacing)
     if alignment is not None:
         paragraph.alignment = alignment
 
@@ -723,7 +724,7 @@ def apply_document_defaults(document: Document, fmt: ResumeFormat) -> None:
     normal.font.name = fmt.font_name
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), fmt.font_name)
     normal.font.size = Pt(fmt.body_size)
-    normal.paragraph_format.line_spacing = fmt.line_spacing
+    normal.paragraph_format.line_spacing = normalize_line_spacing(fmt.line_spacing)
 
     bullet = document.styles["List Bullet"]
     bullet.font.name = fmt.font_name

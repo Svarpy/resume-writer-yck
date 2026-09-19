@@ -259,7 +259,7 @@ class ResumeFormatSpec:
             "margin_left_in": float(self.margin_left_in),
             "header_distance_in": float(self.header_distance_in),
             "footer_distance_in": float(self.footer_distance_in),
-            "line_spacing": float(self.line_spacing),
+            "line_spacing": float(normalize_line_spacing(self.line_spacing)),
             "structure": self.structure,
         }
 
@@ -357,6 +357,44 @@ def _bool_text(value: str, default: bool = False) -> bool:
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_line_spacing(value: Any) -> float:
+    """Return a python-docx multiplier (≈0.5–3.0).
+
+    Word styles often use EXACT line spacing as a Length (EMUs/twips). Casting
+    that Length with ``float()`` yields ~152400, which must not be used as a
+    multiplier — python-docx would compute ``Emu(value * Twips(240))`` and overflow.
+    """
+    if value is None:
+        return float(DEFAULT_FORMAT_VALUES["line_spacing"])
+
+    try:
+        from docx.shared import Length
+
+        if isinstance(value, Length):
+            emus = int(value)
+            if emus <= 0:
+                return float(DEFAULT_FORMAT_VALUES["line_spacing"])
+            # Single-line exact spacing is 240 twips == 152400 EMUs.
+            return max(0.5, min(3.0, emus / 152400.0))
+    except Exception:
+        pass
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(DEFAULT_FORMAT_VALUES["line_spacing"])
+
+    if 0.5 <= number <= 3.0:
+        return number
+    # Raw EMUs mistaken for a multiplier.
+    if number > 1000:
+        return max(0.5, min(3.0, number / 152400.0))
+    # Raw twips mistaken for a multiplier.
+    if number > 3.0:
+        return max(0.5, min(3.0, number / 240.0))
+    return float(DEFAULT_FORMAT_VALUES["line_spacing"])
 
 
 def _structure_to_xml(parent: ET.Element, structure: DocumentStructure) -> None:
@@ -597,7 +635,9 @@ def format_spec_from_xml(xml_text: str, *, fallback_id: str = "", fallback_name:
 
     line_spacing = DEFAULT_FORMAT_VALUES["line_spacing"]
     if spacing is not None:
-        line_spacing = _require_float(_text(spacing, "lineSpacing", str(line_spacing)), "lineSpacing")
+        line_spacing = normalize_line_spacing(
+            _require_float(_text(spacing, "lineSpacing", str(line_spacing)), "lineSpacing")
+        )
 
     template_file = _text(root, "templateFile", "") or None
 
@@ -1082,8 +1122,16 @@ def _extract_experience_layout(document) -> ExperienceLayout:
             widths.append(width_in if width_in and width_in > 0 else 0.0)
 
         if widths[0] > 0 and widths[1] > 0:
-            layout.left_width_in = round(widths[0], 2)
-            layout.right_width_in = round(widths[1], 2)
+            left_w, right_w = round(widths[0], 2), round(widths[1], 2)
+            # Some templates report full-page cell widths for both columns; clamp
+            # to a usable two-column split so generate never overflows page grid.
+            total = left_w + right_w
+            if total > 7.5:
+                scale = 7.0 / total
+                left_w = round(left_w * scale, 2)
+                right_w = round(right_w * scale, 2)
+            layout.left_width_in = left_w
+            layout.right_width_in = right_w
         layout.company_line_mode = "two_column_table"
 
         # Detect bold on left/right runs.
@@ -1369,7 +1417,7 @@ def extract_format_from_docx(docx_path: str | Path, *, name: str = "") -> Resume
     try:
         normal = document.styles["Normal"]
         if normal.paragraph_format.line_spacing is not None:
-            line_spacing = float(normal.paragraph_format.line_spacing)
+            line_spacing = normalize_line_spacing(normal.paragraph_format.line_spacing)
     except Exception:
         pass
 
