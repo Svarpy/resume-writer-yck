@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
@@ -195,9 +195,12 @@ def resume_format_from_store(username: Optional[str] = None) -> ResumeFormat:
     """Build a ResumeFormat from the user's primary format (or app default).
 
     Safe fallback: any store/auth error yields the protected default values.
+    Returns the full primary structure + page setup via ``to_writer_kwargs``.
     """
     try:
-        spec = get_format_for_writer(username if username is not None else get_current_user())
+        resolved_user = username if username is not None else get_current_user()
+        spec = get_format_for_writer(resolved_user)
+        # ResumeFormat is frozen — construct in one shot (do not mutate fields).
         return ResumeFormat(**spec.to_writer_kwargs())
     except Exception:
         return ResumeFormat()
@@ -1764,24 +1767,16 @@ class ResumeWriterApp(tk.Tk):
 
     def _generate(self) -> None:
         try:
-            # Typography can be tweaked in the Writer UI; page setup + structure
-            # always come from the primary (or default) format store.
+            # Full primary ResumeFormat from store (structure + page + typography).
+            # Writer UI font dropdowns may override typography only; margins,
+            # separators, headings, and experience layout always stay primary.
             stored = resume_format_from_store()
-            fmt = ResumeFormat(
+            fmt = replace(
+                stored,
                 font_name=self.font_var.get(),
                 name_size=int(self.name_size_var.get()),
                 heading_size=int(self.heading_size_var.get()),
                 body_size=int(self.body_size_var.get()),
-                page_width_in=stored.page_width_in,
-                page_height_in=stored.page_height_in,
-                margin_top_in=stored.margin_top_in,
-                margin_right_in=stored.margin_right_in,
-                margin_bottom_in=stored.margin_bottom_in,
-                margin_left_in=stored.margin_left_in,
-                header_distance_in=stored.header_distance_in,
-                footer_distance_in=stored.footer_distance_in,
-                line_spacing=stored.line_spacing,
-                structure=stored.structure,
             )
             content = ResumeContent(
                 name=self.name_var.get().strip(),

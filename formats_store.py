@@ -5,13 +5,17 @@ The built-in ``default`` format mirrors the historical hardcoded layout in
 listed, cannot be edited or deleted, and is the fallback when no primary is set.
 
 Format XML version 2 adds a ``<structure>`` block that captures section order,
-heading labels, separators, experience line layout, and related page chrome so
-generation can replicate an uploaded Word template.
+heading labels, separators, experience line layout, and related page chrome.
+
+Format XML version 3 adds template preservation for uploaded ``.docx`` files:
+the original Word package is stored beside the format XML, and section anchors
+map content regions so generate can clone the template rather than approximate it.
 """
 
 from __future__ import annotations
 
 import re
+import shutil
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field, fields
@@ -24,7 +28,7 @@ from user_auth import get_profile, update_profile
 
 DEFAULT_FORMAT_ID = "default"
 DEFAULT_FORMAT_NAME = "Default Application Format"
-FORMAT_XML_VERSION = "2"
+FORMAT_XML_VERSION = "3"
 
 # Historical writer defaults (must stay in sync with ResumeFormat / page setup).
 DEFAULT_FORMAT_VALUES: dict[str, Any] = {
@@ -43,6 +47,15 @@ DEFAULT_FORMAT_VALUES: dict[str, Any] = {
     "line_spacing": 1.0,
 }
 
+# Canonical keys accepted by ``resume_writer_app.build_resume`` section renderers.
+CANONICAL_SECTION_KEYS: tuple[str, ...] = (
+    "summary",
+    "skills",
+    "experience",
+    "education",
+    "certifications",
+)
+
 # Map common heading phrases → canonical section keys used by the writer.
 _SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "summary": ("summary", "professional summary", "profile", "objective"),
@@ -53,6 +66,8 @@ _SECTION_ALIASES: dict[str, tuple[str, ...]] = {
         "employment",
         "professional experience",
         "work history",
+        "career history",
+        "employment history",
     ),
     "education": ("education", "academic background", "academics"),
     "certifications": ("certifications", "certificates", "licenses", "licences"),
@@ -126,6 +141,12 @@ class SectionRule:
     heading: str
     separator_before: bool = True
     order: int = 0
+    # Index of the heading block in the stored template body (excludes sectPr).
+    template_block_index: int = -1
+    # First body block after the heading belonging to this section (-1 if unknown).
+    content_start_index: int = -1
+    # Exclusive end index of the section's content region (-1 if unknown).
+    content_end_index: int = -1
 
 
 @dataclass
@@ -140,20 +161,36 @@ class DocumentStructure:
     contact_separator: str = "  |  "
     name_alignment: str = "left"
     contact_alignment: str = "left"
+    # Body-block index of the first empty separator paragraph in the template.
+    separator_block_index: int = -1
+    # Body-block index of the first two-column experience table (-1 if none).
+    experience_table_index: int = -1
 
     def section_for(self, key: str) -> Optional[SectionRule]:
+        """Return the rule for ``key``, accepting synthetic/alias keys via heading text."""
+        target = canonicalize_section_key(key)
         for section in self.sections:
-            if section.key == key:
+            if canonicalize_section_key(section.key, section.heading) == target:
                 return section
         return None
 
     def ordered_content_keys(self) -> list[str]:
-        """Return content section keys in template order (excludes header chrome)."""
-        content_keys = {"summary", "skills", "experience", "education", "certifications"}
-        ordered = [s.key for s in sorted(self.sections, key=lambda s: s.order) if s.key in content_keys]
-        # Ensure every known section appears even if extraction missed one.
-        for key in ("summary", "skills", "experience", "education", "certifications"):
-            if key not in ordered:
+        """Return canonical content section keys in template order.
+
+        Synthetic extract keys (e.g. ``professional_experience``) are mapped to
+        renderer keys while preserving custom heading labels on the SectionRule.
+        """
+        content_keys = set(CANONICAL_SECTION_KEYS)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for section in sorted(self.sections, key=lambda s: s.order):
+            canonical = canonicalize_section_key(section.key, section.heading)
+            if canonical not in content_keys or canonical in seen:
+                continue
+            ordered.append(canonical)
+            seen.add(canonical)
+        for key in CANONICAL_SECTION_KEYS:
+            if key not in seen:
                 ordered.append(key)
         return ordered
 
@@ -200,6 +237,9 @@ class ResumeFormatSpec:
     structure: DocumentStructure = field(default_factory=default_document_structure)
     protected: bool = False
     source: str = "manual"  # manual | docx | default
+    # Relative filename under the user's formats dir (e.g. "{id}.template.docx").
+    # Absent for the protected default and manually created formats.
+    template_file: Optional[str] = None
 
     def to_writer_kwargs(self) -> dict[str, Any]:
         """Subset accepted by ``resume_writer_app.ResumeFormat``."""
@@ -232,7 +272,11 @@ class ResumeFormatSpec:
             "body_size": self.body_size,
             "section_count": len(self.structure.sections),
             "has_separators": self.structure.separator.enabled,
+            "has_template": bool(self.template_file),
         }
+
+    def has_template(self) -> bool:
+        return bool(self.template_file)
 
 
 def default_format_spec() -> ResumeFormatSpec:
@@ -255,13 +299,34 @@ def _new_format_id(name: str) -> str:
     return f"{_slugify_name(name)}-{uuid.uuid4().hex[:8]}"
 
 
-def _format_path(username: str, format_id: str) -> Path:
-    if format_id == DEFAULT_FORMAT_ID:
-        raise FormatProtectedError("Default format is not stored as a user file")
+def _safe_format_id(format_id: str) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9._-]+", "_", format_id.strip())
     if not safe_id or safe_id == DEFAULT_FORMAT_ID:
         raise FormatValidationError("Invalid format id")
-    return user_formats_dir(username) / f"{safe_id}.xml"
+    return safe_id
+
+
+def _format_path(username: str, format_id: str) -> Path:
+    if format_id == DEFAULT_FORMAT_ID:
+        raise FormatProtectedError("Default format is not stored as a user file")
+    return user_formats_dir(username) / f"{_safe_format_id(format_id)}.xml"
+
+
+def _template_filename(format_id: str) -> str:
+    return f"{_safe_format_id(format_id)}.template.docx"
+
+
+def format_template_path(username: str, format_id: str) -> Path:
+    """Absolute path where an uploaded template ``.docx`` would be stored."""
+    return user_formats_dir(username) / _template_filename(format_id)
+
+
+def resolve_format_template_path(username: str, spec: ResumeFormatSpec) -> Optional[Path]:
+    """Return the on-disk template for a format, or ``None`` if absent/default."""
+    if spec.id == DEFAULT_FORMAT_ID or not spec.template_file:
+        return None
+    path = user_formats_dir(username) / Path(spec.template_file).name
+    return path if path.is_file() else None
 
 
 def _text(parent: ET.Element, tag: str, default: str = "") -> str:
@@ -299,6 +364,9 @@ def _structure_to_xml(parent: ET.Element, structure: DocumentStructure) -> None:
         sec = ET.SubElement(sections_el, "section", {"key": section.key, "order": str(section.order)})
         ET.SubElement(sec, "heading").text = section.heading
         ET.SubElement(sec, "separatorBefore").text = "true" if section.separator_before else "false"
+        ET.SubElement(sec, "templateBlockIndex").text = str(int(section.template_block_index))
+        ET.SubElement(sec, "contentStartIndex").text = str(int(section.content_start_index))
+        ET.SubElement(sec, "contentEndIndex").text = str(int(section.content_end_index))
 
     sep = ET.SubElement(root, "separator")
     ET.SubElement(sep, "enabled").text = "true" if structure.separator.enabled else "false"
@@ -334,6 +402,8 @@ def _structure_to_xml(parent: ET.Element, structure: DocumentStructure) -> None:
     ET.SubElement(root, "contactSeparator").text = structure.contact_separator
     ET.SubElement(root, "nameAlignment").text = structure.name_alignment
     ET.SubElement(root, "contactAlignment").text = structure.contact_alignment
+    ET.SubElement(root, "separatorBlockIndex").text = str(int(structure.separator_block_index))
+    ET.SubElement(root, "experienceTableIndex").text = str(int(structure.experience_table_index))
 
 
 def _structure_from_xml(root: ET.Element) -> DocumentStructure:
@@ -352,7 +422,18 @@ def _structure_from_xml(root: ET.Element) -> DocumentStructure:
             order = _require_int(sec.attrib.get("order", str(len(sections))), "section.order")
             heading = _text(sec, "heading", key.upper())
             separator_before = _bool_text(_text(sec, "separatorBefore", "true"), True)
-            sections.append(SectionRule(key=key, heading=heading, separator_before=separator_before, order=order))
+            key = canonicalize_section_key(key, heading)
+            sections.append(
+                SectionRule(
+                    key=key,
+                    heading=heading,
+                    separator_before=separator_before,
+                    order=order,
+                    template_block_index=_require_int(_text(sec, "templateBlockIndex", "-1"), "templateBlockIndex"),
+                    content_start_index=_require_int(_text(sec, "contentStartIndex", "-1"), "contentStartIndex"),
+                    content_end_index=_require_int(_text(sec, "contentEndIndex", "-1"), "contentEndIndex"),
+                )
+            )
     if not sections:
         sections = list(base.sections)
 
@@ -428,6 +509,14 @@ def _structure_from_xml(root: ET.Element) -> DocumentStructure:
         contact_separator=_text(structure_el, "contactSeparator", base.contact_separator) or base.contact_separator,
         name_alignment=_text(structure_el, "nameAlignment", base.name_alignment) or base.name_alignment,
         contact_alignment=_text(structure_el, "contactAlignment", base.contact_alignment) or base.contact_alignment,
+        separator_block_index=_require_int(
+            _text(structure_el, "separatorBlockIndex", str(base.separator_block_index)),
+            "separatorBlockIndex",
+        ),
+        experience_table_index=_require_int(
+            _text(structure_el, "experienceTableIndex", str(base.experience_table_index)),
+            "experienceTableIndex",
+        ),
     )
 
 
@@ -457,6 +546,9 @@ def format_spec_to_xml(spec: ResumeFormatSpec) -> str:
     ET.SubElement(spacing, "lineSpacing").text = str(spec.line_spacing)
 
     _structure_to_xml(root, spec.structure or default_document_structure())
+
+    if spec.template_file:
+        ET.SubElement(root, "templateFile").text = spec.template_file
 
     rough = ET.tostring(root, encoding="utf-8")
     pretty = minidom.parseString(rough).toprettyxml(indent="  ", encoding="utf-8")
@@ -494,6 +586,8 @@ def format_spec_from_xml(xml_text: str, *, fallback_id: str = "", fallback_name:
     if spacing is not None:
         line_spacing = _require_float(_text(spacing, "lineSpacing", str(line_spacing)), "lineSpacing")
 
+    template_file = _text(root, "templateFile", "") or None
+
     return ResumeFormatSpec(
         id=fmt_id,
         name=name,
@@ -519,6 +613,7 @@ def format_spec_from_xml(xml_text: str, *, fallback_id: str = "", fallback_name:
         ),
         line_spacing=line_spacing,
         structure=_structure_from_xml(root),
+        template_file=template_file,
     )
 
 
@@ -547,6 +642,19 @@ def _coerce_structure(value: Any) -> DocumentStructure:
                         order=int(item.get("order", len(sections))),
                     )
                 )
+        sections = [
+            SectionRule(
+                key=canonicalize_section_key(s.key, s.heading),
+                heading=s.heading,
+                separator_before=s.separator_before,
+                order=s.order,
+                template_block_index=getattr(s, "template_block_index", -1),
+                content_start_index=getattr(s, "content_start_index", -1),
+                content_end_index=getattr(s, "content_end_index", -1),
+            )
+            for s in sections
+            if (s.key or "").strip()
+        ]
         sep = value.get("separator", {})
         if isinstance(sep, SeparatorStyle):
             separator = sep
@@ -761,6 +869,8 @@ def _normalize_heading_text(text: str) -> str:
 
 def _match_section_key(heading_text: str) -> Optional[str]:
     normalized = _normalize_heading_text(heading_text)
+    if not normalized:
+        return None
     for key, aliases in _SECTION_ALIASES.items():
         if normalized in aliases:
             return key
@@ -770,6 +880,28 @@ def _match_section_key(heading_text: str) -> Optional[str]:
             if normalized.startswith(alias):
                 return key
     return None
+
+
+def canonicalize_section_key(key: str, heading: str = "") -> str:
+    """Map synthetic or alias section keys to writer renderer keys.
+
+    Extraction may persist keys like ``professional_experience`` when a heading
+    is not recognized up front. Generation must still bind those rules to the
+    ``experience`` renderer while keeping the custom heading label.
+    """
+    raw = (key or "").strip()
+    if raw in CANONICAL_SECTION_KEYS:
+        return raw
+    # Underscore/hyphen slugs → phrase form for alias matching.
+    slug_as_phrase = re.sub(r"[_\-]+", " ", raw)
+    matched = _match_section_key(slug_as_phrase) or _match_section_key(raw)
+    if matched:
+        return matched
+    if heading:
+        matched = _match_section_key(heading)
+        if matched:
+            return matched
+    return raw
 
 
 def _paragraph_has_bottom_border(paragraph) -> bool:
@@ -826,6 +958,8 @@ def _looks_like_section_heading(paragraph, *, body_size: int) -> bool:
     if _match_section_key(text):
         return True
     # Short bold / larger / ALL-CAPS lines are likely headings.
+    # Require ALL-CAPS for non-alias matches so name/body lines (e.g. "Jane Doe")
+    # are not stored as synthetic section keys that confuse generation.
     runs = [r for r in paragraph.runs if r.text and r.text.strip()]
     if not runs:
         return False
@@ -837,7 +971,7 @@ def _looks_like_section_heading(paragraph, *, body_size: int) -> bool:
     larger = any(s >= body_size + 1 for s in sizes)
     mostly_upper = text == text.upper() and any(c.isalpha() for c in text)
     word_count = len(text.split())
-    return word_count <= 6 and (boldish or larger or mostly_upper)
+    return word_count <= 6 and mostly_upper and (boldish or larger)
 
 
 def _extract_page_border(section) -> PageBorderStyle:
@@ -987,7 +1121,9 @@ def _extract_structure_from_document(document, *, body_size: int) -> DocumentStr
         key = _match_section_key(heading_text)
         if key is None:
             # Unknown heading — keep label under a synthetic key for persistence.
+            # Generation remaps known phrases (e.g. professional_experience → experience).
             key = re.sub(r"[^a-z0-9]+", "_", heading_text.casefold()).strip("_") or f"section_{order}"
+            key = canonicalize_section_key(key, heading_text)
         if key in seen_keys:
             continue
         seen_keys.add(key)
