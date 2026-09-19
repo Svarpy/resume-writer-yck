@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 
 import formats_store
@@ -139,15 +139,12 @@ class FormatterPage(tk.Frame):
             label = self.app._label(row, detail)
             label.grid(row=0, column=0, sticky="w")
             if not spec.protected:
-                self.app._button(row, "Update", lambda s=spec: self._update_format(s)).grid(
-                    row=0, column=1, padx=(8, 4)
-                )
                 self.app._button(row, "Delete", lambda s=spec: self._delete_format(s)).grid(
-                    row=0, column=2, padx=(0, 4)
+                    row=0, column=1, padx=(8, 4)
                 )
             else:
                 locked = self.app._label(row, "Locked", muted=True)
-                locked.grid(row=0, column=1, columnspan=2, sticky="e", padx=(8, 4))
+                locked.grid(row=0, column=1, sticky="e", padx=(8, 4))
             self._format_rows.append(row)
 
     def _set_primary(self) -> None:
@@ -161,6 +158,60 @@ class FormatterPage(tk.Frame):
             self.on_primary_changed(spec)
         messagebox.showinfo("Primary format", f"Primary format set to:\n{spec.name}")
 
+    def _ask_format_name(self, initial: str = "") -> Optional[str]:
+        """Themed name dialog with readable Cancel/Save text buttons (no glyph icons)."""
+        dialog = tk.Toplevel(self)
+        dialog.title("Format name")
+        dialog.transient(self.winfo_toplevel())
+        dialog.resizable(False, False)
+        dialog.configure(bg=self.app.c("panel_bg"))
+        dialog.grab_set()
+
+        result: dict[str, Optional[str]] = {"value": None}
+        name_var = tk.StringVar(value=initial)
+
+        body = self.app._track(
+            tk.Frame(dialog, bg=self.app.c("panel_bg"), padx=20, pady=16),
+            "panel_frame",
+        )
+        body.pack(fill=tk.BOTH, expand=True)
+
+        self.app._label(body, "Name for this format:").pack(anchor="w", pady=(0, 8))
+        entry = self.app._entry(body, name_var, width=36)
+        entry.pack(fill=tk.X, pady=(0, 16))
+        entry.focus_set()
+        entry.selection_range(0, tk.END)
+
+        buttons = self.app._track(tk.Frame(body, bg=self.app.c("panel_bg")), "panel_frame")
+        buttons.pack(fill=tk.X)
+
+        def _cancel() -> None:
+            result["value"] = None
+            dialog.destroy()
+
+        def _save() -> None:
+            result["value"] = name_var.get()
+            dialog.destroy()
+
+        # Explicit text labels — avoid Tk glyph/icon buttons that render as dots on macOS.
+        cancel_btn = self.app._button(buttons, "Cancel", _cancel)
+        cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        save_btn = self.app._button(buttons, "Save", _save, accent=True)
+        save_btn.pack(side=tk.RIGHT)
+
+        dialog.bind("<Return>", lambda _event: _save())
+        dialog.bind("<Escape>", lambda _event: _cancel())
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+
+        dialog.update_idletasks()
+        parent = self.winfo_toplevel()
+        x = parent.winfo_rootx() + max(40, (parent.winfo_width() - dialog.winfo_reqwidth()) // 2)
+        y = parent.winfo_rooty() + max(40, (parent.winfo_height() - dialog.winfo_reqheight()) // 3)
+        dialog.geometry(f"+{x}+{y}")
+
+        self.wait_window(dialog)
+        return result["value"]
+
     def _add_format(self) -> None:
         path = filedialog.askopenfilename(
             title="Upload Word document",
@@ -168,8 +219,11 @@ class FormatterPage(tk.Frame):
         )
         if not path:
             return
-        name = simpledialog.askstring("Format name", "Name for this format:", parent=self)
-        if not name or not name.strip():
+        name = self._ask_format_name()
+        if name is None:
+            return
+        if not name.strip():
+            messagebox.showwarning("Add Format", "Please enter a format name.", parent=self)
             return
         try:
             spec = formats_store.add_format_from_docx(self._username(), path, name.strip())
@@ -181,50 +235,6 @@ class FormatterPage(tk.Frame):
             return
         self.refresh()
         messagebox.showinfo("Add Format", f"Saved format:\n{spec.name}")
-
-    def _update_format(self, spec: formats_store.ResumeFormatSpec) -> None:
-        if spec.protected:
-            messagebox.showwarning("Update Format", "The default application format cannot be edited.")
-            return
-        new_name = simpledialog.askstring(
-            "Update format",
-            "New display name (leave blank to keep current):",
-            initialvalue=spec.name,
-            parent=self,
-        )
-        if new_name is None:
-            return
-        replace = messagebox.askyesno(
-            "Update format",
-            "Replace format details from a new Word document?\n\n"
-            "Choose Yes to upload a .docx, or No to rename only.",
-            parent=self,
-        )
-        try:
-            if replace:
-                path = filedialog.askopenfilename(
-                    title="Upload Word document",
-                    filetypes=[("Word documents", "*.docx"), ("All files", "*.*")],
-                )
-                if not path:
-                    return
-                extracted = formats_store.extract_format_from_docx(path, name=new_name.strip() or spec.name)
-                formats_store.update_format(
-                    self._username(),
-                    spec.id,
-                    name=new_name.strip() or spec.name,
-                    xml_text=formats_store.format_spec_to_xml(extracted),
-                )
-            else:
-                formats_store.update_format(
-                    self._username(),
-                    spec.id,
-                    name=new_name.strip() or spec.name,
-                )
-        except formats_store.FormatError as exc:
-            messagebox.showerror("Update Format", str(exc))
-            return
-        self.refresh()
 
     def _delete_format(self, spec: formats_store.ResumeFormatSpec) -> None:
         if spec.protected:

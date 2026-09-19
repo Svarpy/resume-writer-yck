@@ -4,6 +4,12 @@
 > Maintain updates on the Notion page: https://app.notion.com/p/3e0bfc4f45de80e38d83c7db6005af1e
 > This local file is retained pending Project Lead / PM approval to delete.
 
+## v3.0.0
+
+- App version shown as v3.0.0 in the window title and About dialog.
+- Signup confirm-password live match feedback; Sign Out returns to a cleared Sign In page.
+- Sidebar shows display name (falls back to username); Formatter no longer offers Update on saved formats.
+
 ## v2.1
 
 - Updated Job Experience fallback dates and preserved pasted dates before applying company-aware fallback defaults.

@@ -4,7 +4,7 @@
 > Maintain updates on the Notion page: https://app.notion.com/p/3e0bfc4f45de80538071d57b3bc7e75b
 > This local file is retained pending Project Lead / PM approval to delete.
 
-Version: v2.1
+Version: v3.0.0
 
 Resume Writer is a desktop application for creating a formatted `.docx` resume from user-provided content. It is designed to keep the resume format consistent while allowing the main content, header details, education selections, certifications, and output file path to be edited from the app.
 

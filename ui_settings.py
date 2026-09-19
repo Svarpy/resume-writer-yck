@@ -110,6 +110,8 @@ class SettingsPage(tk.Frame):
         except user_auth.AuthError as exc:
             messagebox.showerror("Save Profile", str(exc))
             return
+        if hasattr(self.app, "_refresh_sidebar_user_label"):
+            self.app._refresh_sidebar_user_label()
         messagebox.showinfo("Save Profile", "Profile updated.")
 
     def _change_password(self) -> None:

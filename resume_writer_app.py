@@ -29,7 +29,7 @@ EMAIL = "yashashchandrakollu1@gmail.com"
 PHONE = "+1 (205) 897 7790"
 PHONE_LINK = "tel:+1%20(205)%20897%207790"
 LOCATION = "Atlanta, GA"
-APP_VERSION = "v2.1.0"
+APP_VERSION = "v3.0.0"
 DEFAULT_OUTPUT_DIR = Path("/Users/yck/Desktop/CLGENAPPL")
 
 FONT_CHOICES = (
@@ -791,6 +791,7 @@ class ResumeWriterApp(tk.Tk):
         self.shell_container.pack_forget()
         self.auth_container.pack(fill=tk.BOTH, expand=True)
         if self.auth_view is not None:
+            self.auth_view.clear_form(mode="signin")
             self.auth_view.focus_username()
 
     def _enter_authenticated_shell(self, profile) -> None:
@@ -800,7 +801,10 @@ class ResumeWriterApp(tk.Tk):
         self._refresh_custom_controls()
 
         if self.shell is not None:
-            self.shell.set_username(profile.username)
+            self.shell.set_signed_in_label(
+                display_name=getattr(profile, "display_name", "") or "",
+                username=getattr(profile, "username", "") or "",
+            )
             self.shell.apply_default_collapse_for_width(self.winfo_width() or 1060)
 
         self._apply_primary_format_from_store()
@@ -812,6 +816,18 @@ class ResumeWriterApp(tk.Tk):
     def _logout(self) -> None:
         user_auth.clear_session()
         self._show_auth()
+
+    def _refresh_sidebar_user_label(self) -> None:
+        if self.shell is None:
+            return
+        try:
+            profile = user_auth.get_current_profile()
+        except user_auth.AuthError:
+            return
+        self.shell.set_signed_in_label(
+            display_name=profile.display_name,
+            username=profile.username,
+        )
 
     def _show_page(self, page_key: str) -> None:
         page = self._pages.get(page_key)

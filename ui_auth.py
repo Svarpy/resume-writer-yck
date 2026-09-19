@@ -30,8 +30,11 @@ class AuthView(tk.Frame):
         self.display_name_var = tk.StringVar()
         self.email_var = tk.StringVar()
         self.status_var = tk.StringVar(value="")
+        self.match_var = tk.StringVar(value="")
 
         self._build()
+        self.password_var.trace_add("write", lambda *_args: self._refresh_password_match())
+        self.confirm_var.trace_add("write", lambda *_args: self._refresh_password_match())
 
     def _build(self) -> None:
         card = self.app._track(
@@ -59,27 +62,31 @@ class AuthView(tk.Frame):
         self.confirm_entry = self.app._entry(card, self.confirm_var, width=36)
         self.confirm_entry.configure(show="•")
         self.confirm_label.grid(row=6, column=0, sticky="w", pady=(0, 4))
-        self.confirm_entry.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        self.confirm_entry.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+
+        self.match_label = self.app._label(card, "")
+        self.match_label.configure(textvariable=self.match_var)
+        self.match_label.grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         self.display_label = self.app._label(card, "Display Name (optional)")
         self.display_entry = self.app._entry(card, self.display_name_var, width=36)
-        self.display_label.grid(row=8, column=0, sticky="w", pady=(0, 4))
-        self.display_entry.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        self.display_label.grid(row=9, column=0, sticky="w", pady=(0, 4))
+        self.display_entry.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
         self.email_label = self.app._label(card, "Email (optional)")
         self.email_entry = self.app._entry(card, self.email_var, width=36)
-        self.email_label.grid(row=10, column=0, sticky="w", pady=(0, 4))
-        self.email_entry.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        self.email_label.grid(row=11, column=0, sticky="w", pady=(0, 4))
+        self.email_entry.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
         self.submit_button = self.app._button(card, "Sign In", self._submit, accent=True)
-        self.submit_button.grid(row=12, column=0, sticky="w", pady=(8, 8))
+        self.submit_button.grid(row=13, column=0, sticky="w", pady=(8, 8))
 
         self.switch_button = self.app._button(card, "Need an account? Sign Up", self._toggle_mode)
-        self.switch_button.grid(row=12, column=1, sticky="e", pady=(8, 8))
+        self.switch_button.grid(row=13, column=1, sticky="e", pady=(8, 8))
 
         status = self.app._label(card, "", muted=True)
         status.configure(textvariable=self.status_var)
-        status.grid(row=13, column=0, columnspan=2, sticky="w")
+        status.grid(row=14, column=0, columnspan=2, sticky="w")
 
         self.status_label = status
         self._apply_mode_visibility()
@@ -107,6 +114,7 @@ class AuthView(tk.Frame):
         for widget in (
             self.confirm_label,
             self.confirm_entry,
+            self.match_label,
             self.display_label,
             self.display_entry,
             self.email_label,
@@ -116,6 +124,23 @@ class AuthView(tk.Frame):
                 widget.grid()
             else:
                 widget.grid_remove()
+        self._refresh_password_match()
+
+    def _refresh_password_match(self) -> None:
+        if self.mode.get() != "signup":
+            self.match_var.set("")
+            return
+        password = self.password_var.get()
+        confirm = self.confirm_var.get()
+        if not confirm:
+            self.match_var.set("")
+            return
+        if password == confirm:
+            self.match_var.set("Passwords match")
+            self.match_label.configure(fg=self.app.c("ok_fg"))
+        else:
+            self.match_var.set("Passwords do not match")
+            self.match_label.configure(fg=self.app.c("error_fg"))
 
     def _submit(self) -> None:
         username = self.username_var.get().strip()
@@ -142,9 +167,20 @@ class AuthView(tk.Frame):
             return
 
         self.status_var.set("")
+        self.clear_form(mode="signin")
+        self.on_authenticated(profile)
+
+    def clear_form(self, *, mode: str = "signin") -> None:
+        """Reset fields and show Sign In (or Sign Up) with a clean slate."""
+        self.mode.set(mode)
+        self.username_var.set("")
         self.password_var.set("")
         self.confirm_var.set("")
-        self.on_authenticated(profile)
+        self.display_name_var.set("")
+        self.email_var.set("")
+        self.status_var.set("")
+        self.match_var.set("")
+        self._apply_mode_visibility()
 
     def focus_username(self) -> None:
         # Best-effort focus for first entry field.

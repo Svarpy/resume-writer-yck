@@ -84,8 +84,14 @@ class AppShell(tk.Frame):
 
         self._refresh_nav_styles()
 
+    def set_signed_in_label(self, display_name: str = "", username: str = "") -> None:
+        """Prefer display name; fall back to username when display name is empty."""
+        label = (display_name or "").strip() or (username or "").strip() or "user"
+        self.user_label.configure(text=f"Signed in as {label}")
+
     def set_username(self, username: str) -> None:
-        self.user_label.configure(text=f"Signed in as {username}")
+        # Backward-compatible alias; prefer set_signed_in_label when profile is available.
+        self.set_signed_in_label(username=username)
 
     def navigate(self, page_key: str) -> None:
         if page_key not in self._nav_buttons:
