@@ -145,19 +145,22 @@ jobs:
         run: |
           set -euo pipefail
           ls -la release-assets
+          {
+            echo "Resume Writer ${VERSION}"
+            echo ""
+            echo "Built by GitHub Actions from main (PyInstaller onedir, unsigned)."
+            echo ""
+            echo "Assets:"
+            echo "- macOS: ResumeWriter${VERSION}.app.zip"
+            echo "- Windows: ResumeWriter${VERSION}.exe.zip"
+            echo ""
+            echo "See RELEASE.md for the cut checklist and signing status."
+          } > release-notes.md
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists; uploading any missing assets."
             gh release upload "$VERSION" release-assets/* --clobber
           else
             gh release create "$VERSION" release-assets/* \
               --title "Resume Writer ${VERSION}" \
-              --notes "Resume Writer ${VERSION}
-
-Built by GitHub Actions from \`main\` (PyInstaller onedir, unsigned).
-
-Assets:
-- macOS: ResumeWriter${VERSION}.app.zip
-- Windows: ResumeWriter${VERSION}.exe.zip
-
-See RELEASE.md for the cut checklist and signing status."
+              --notes-file release-notes.md
           fi
