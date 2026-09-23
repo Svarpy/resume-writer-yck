@@ -10,6 +10,7 @@ Resume Writer is a desktop application for creating a formatted `.docx` resume f
 
 ## Contents
 
+- [Project Layout](#project-layout)
 - [What The Application Includes](#what-the-application-includes)
 - [Generated Resume Behavior](#generated-resume-behavior)
 - [Required Fields And Validation](#required-fields-and-validation)
@@ -21,6 +22,47 @@ Resume Writer is a desktop application for creating a formatted `.docx` resume f
 - [Updating Dependencies](#updating-dependencies)
 - [Security Notes](#security-notes)
 - [Troubleshooting](#troubleshooting)
+
+## Project Layout
+
+Pre–Sprint 2 package refactor on `genpubv3` (structure and hygiene only; no feature changes). Application code lives under the `resume_writer/` package. Repo-root modules such as `resume_writer_app.py`, `ui_*.py`, `user_auth.py`, `formats_store.py`, and `app_paths.py` are thin entrypoints or compatibility shims.
+
+### Package tree
+
+```text
+resume_writer/
+  __main__.py          # python -m resume_writer
+  constants.py
+  paths.py             # app data directory helpers
+  auth/                # user auth service
+  docs/                # in-app documentation.md + loader
+  formats/             # saved formats store / extract / models
+  render/              # DOCX build, parse, template apply
+  ui/                  # Tk shell, Writer, Formatter, Settings, auth UI
+tests/                 # unittest suite + fixtures
+```
+
+### How to run
+
+```bash
+python3 resume_writer_app.py
+# or
+python3 -m resume_writer
+```
+
+### Tests
+
+```bash
+python -m unittest discover -s tests
+```
+
+### Layer rule
+
+Dependencies should point downward only:
+
+`ui` → `render` → `formats` → `auth` → `paths`
+
+Lower layers must not import higher ones (for example `paths` must not import `ui`). Compat shims at the repo root re-export package symbols for older imports and tests.
 
 ## What The Application Includes
 
@@ -212,7 +254,9 @@ python -m pip install -r requirements.txt
 8. Start the app:
 
 ```bash
-python resume_writer_app.py
+python3 resume_writer_app.py
+# or
+python3 -m resume_writer
 ```
 
 ### Option 2: Build A Mac App
@@ -273,6 +317,8 @@ python -m pip install -r requirements.txt
 
 ```powershell
 python resume_writer_app.py
+# or
+python -m resume_writer
 ```
 
 ### Option 2: Build A Windows App

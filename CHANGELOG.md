@@ -4,6 +4,10 @@
 > Maintain updates on the Notion page: https://app.notion.com/p/3e0bfc4f45de80e38d83c7db6005af1e
 > This local file is retained pending Project Lead / PM approval to delete.
 
+## Unreleased
+
+- Pre–Sprint 2 package layout refactor (structure/hygiene only): application code under `resume_writer/` with layer rule `ui` → `render` → `formats` → `auth` → `paths`; thin `resume_writer_app.py` / `python -m resume_writer` entrypoints and root compat shims; unittest suite under `tests/` via `python -m unittest discover -s tests`.
+
 ## v3.0.0
 
 - App version shown as v3.0.0 in the window title and About dialog.
