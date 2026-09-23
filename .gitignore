@@ -6,3 +6,4 @@ rendered_sample/
 build/
 dist/
 .worktrees/
+release/out/

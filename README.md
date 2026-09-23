@@ -38,6 +38,13 @@ python3 -m resume_writer
 python -m unittest discover -s tests -v
 ```
 
+## Releases
+
+GitHub Actions on **`main`** runs tests always; when `HEAD` has a git tag equal to
+`APP_VERSION` (`vX.Y.Z`), it also builds macOS/Windows PyInstaller zips and
+publishes a GitHub Release. See [RELEASE.md](RELEASE.md) for the cut checklist
+(`bump APP_VERSION` + tag `vX.Y.Z` when merging to `main`).
+
 The UI uses explicitly styled plain Tk widgets instead of `ttk` because macOS's bundled Tk 8.5 can render `ttk` controls incorrectly in dark mode.
 
 The generated document uses the base resume's page geometry: US Letter with 0.75 inch margins and compact paragraph spacing. The default typeface is Arial, matching the base document defaults.

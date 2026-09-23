@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-__all__ = ["__version__"]
+from resume_writer.constants import APP_VERSION
 
-# Keep in sync with resume_writer.constants.APP_VERSION
-__version__ = "v3.0.0"
+__all__ = ["__version__", "APP_VERSION"]
+
+# Single source of truth: resume_writer.constants.APP_VERSION
+__version__ = APP_VERSION

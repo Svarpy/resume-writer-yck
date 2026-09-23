@@ -1,0 +1,163 @@
+name: Release
+
+# Sprint 2: publish only from main. Feature / genpubv3 pushes do not run this.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    # Manual re-run after tagging main HEAD (see RELEASE.md).
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test and version gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      should_release: ${{ steps.gate.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --force --tags
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Version / tag gate
+        id: gate
+        run: |
+          python release/check_release_tag.py | tee gate.out
+          VERSION=$(grep '^version=' gate.out | cut -d= -f2)
+          SHOULD=$(grep '^should_release=' gate.out | cut -d= -f2)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "should_release=${SHOULD}" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION=${VERSION} should_release=${SHOULD}"
+
+  build-macos:
+    name: Build macOS
+    needs: test
+    if: needs.test.outputs.should_release == 'true'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build and zip
+        env:
+          # Sprint 2: unsigned. Set RESUME_WRITER_SIGN=1 + cert secrets later.
+          RESUME_WRITER_SIGN: "0"
+        run: python release/build_release.py
+
+      - name: Upload macOS asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-zip
+          path: release/out/*.app.zip
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows
+    needs: test
+    if: needs.test.outputs.should_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build and zip
+        env:
+          RESUME_WRITER_SIGN: "0"
+        run: python release/build_release.py
+
+      - name: Upload Windows asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-zip
+          path: release/out/*.exe.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [test, build-macos, build-windows]
+    if: needs.test.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS asset
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release-zip
+          path: release-assets
+
+      - name: Download Windows asset
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-zip
+          path: release-assets
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.test.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -la release-assets
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; uploading any missing assets."
+            gh release upload "$VERSION" release-assets/* --clobber
+          else
+            gh release create "$VERSION" release-assets/* \
+              --title "Resume Writer ${VERSION}" \
+              --notes "Resume Writer ${VERSION}
+
+Built by GitHub Actions from \`main\` (PyInstaller onedir, unsigned).
+
+Assets:
+- macOS: ResumeWriter${VERSION}.app.zip
+- Windows: ResumeWriter${VERSION}.exe.zip
+
+See RELEASE.md for the cut checklist and signing status."
+          fi
