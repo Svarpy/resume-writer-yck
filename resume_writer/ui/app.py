@@ -160,6 +160,17 @@ class ResumeWriterApp(tk.Tk):
         self.shell_container.pack(fill=tk.BOTH, expand=True)
         if self.shell is not None:
             self.shell.navigate("writer")
+        self._schedule_update_check()
+
+    def _schedule_update_check(self) -> None:
+        """Weekly public GitHub Releases check after the main shell is ready."""
+        try:
+            from resume_writer.update import schedule_launch_update_check
+
+            schedule_launch_update_check(self)
+        except Exception:
+            # Updater must never block or crash sign-in / shell entry.
+            pass
 
     def _logout(self) -> None:
         user_auth.clear_session()
