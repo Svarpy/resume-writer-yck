@@ -28,6 +28,14 @@ A small Python desktop application that collects resume content and writes a `.d
 ```bash
 python3 -m pip install -r requirements.txt
 python3 resume_writer_app.py
+# or
+python3 -m resume_writer
+```
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 The UI uses explicitly styled plain Tk widgets instead of `ttk` because macOS's bundled Tk 8.5 can render `ttk` controls incorrectly in dark mode.

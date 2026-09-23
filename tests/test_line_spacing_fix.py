@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+
+# Ensure repo root is importable when tests live under tests/.
+import sys
+from pathlib import Path as _Path
+
+_ROOT = _Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import os
 import tempfile
 import unittest
@@ -20,7 +29,7 @@ from formats_store import (  # noqa: E402
 )
 from user_auth import signup, set_current_user  # noqa: E402
 
-FIXTURE = Path(__file__).resolve().parent / "tests" / "fixtures" / "formats" / "YcKITFTR1.docx"
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "formats" / "YcKITFTR1.docx"
 DESKTOP = Path("/Users/yck/Desktop/CLGENAPPL/base/YcKITFTR1.docx")
 
 

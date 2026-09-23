@@ -1,4 +1,4 @@
-"""Compat shim — prefer ``resume_writer.auth.service``."""
+"""Local authentication and profile storage."""
 
 from __future__ import annotations
 

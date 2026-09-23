@@ -5,3 +5,4 @@ rendered_sample/
 .venv/
 build/
 dist/
+.worktrees/
