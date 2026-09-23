@@ -1496,6 +1496,8 @@ class ResumeWriterApp(tk.Tk):
             errors.append("Job Experience is required")
         if not self._text_value(self.top_skills_text):
             errors.append("Top 5 Skills are required")
+        if not self.output_name_part_var.get().strip():
+            errors.append("File Name is required")
         if not self.output_var.get().strip():
             errors.append("Output file is required")
         if self._matching_existing_output_files():
@@ -1725,6 +1727,9 @@ class ResumeWriterApp(tk.Tk):
                     pass
         # Theme role defaults overwrite dynamic status colors; restore them.
         self._update_validation_state()
+        # Sidebar chrome (collapsed flat icons / Sign Out) depends on expanded state.
+        if self.shell is not None:
+            self.shell._refresh_nav_styles()
 
     def _output_directory(self) -> Path:
         return Path(self.output_dir_var.get().strip() or str(DEFAULT_OUTPUT_DIR)).expanduser()

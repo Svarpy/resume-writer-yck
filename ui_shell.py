@@ -17,6 +17,18 @@ NAV_ITEMS = (
     ("documentation", "Documentation"),
 )
 
+# Simple ASCII glyphs render cleanly on macOS Tk (avoid soft emoji).
+COLLAPSED_NAV_ICONS = {
+    "writer": "W",
+    "formatter": "F",
+    "settings": "S",
+    "documentation": "D",
+}
+LOGOUT_ICON = "↪"
+COLLAPSED_ICON_FONT = ("Arial", 17, "bold")
+EXPANDED_NAV_FONT = ("Arial", 12)
+MENU_ICON_FONT = ("Arial", 18, "bold")
+
 
 class AppShell(tk.Frame):
     """Left sidebar + page container around the existing writer UI."""
@@ -60,7 +72,7 @@ class AppShell(tk.Frame):
         top.pack(fill=tk.X)
 
         self.menu_button = self.app._icon_button(top, "☰", self.toggle_sidebar)
-        self.menu_button.configure(font=("Arial", 16, "bold"))
+        self.menu_button.configure(font=MENU_ICON_FONT, relief=tk.FLAT, bd=0, highlightthickness=0)
         self.menu_button.pack(side=tk.LEFT)
 
         self.brand_label = self.app._label(top, "Resume Writer")
@@ -106,6 +118,8 @@ class AppShell(tk.Frame):
         self.sidebar.configure(width=width)
         if expanded:
             self.brand_label.pack(side=tk.LEFT, padx=(8, 0))
+            self.logout_button.configure(text="Sign Out")
+            self.logout_button.normal_text = "Sign Out"
             self.logout_button.pack(fill=tk.X, padx=8, pady=(4, 12))
             self.user_label.pack(fill=tk.X, padx=12, pady=(0, 8))
             for key, title in NAV_ITEMS:
@@ -113,16 +127,13 @@ class AppShell(tk.Frame):
                 self._nav_buttons[key].normal_text = title
         else:
             self.brand_label.pack_forget()
-            self.logout_button.pack_forget()
             self.user_label.pack_forget()
-            icons = {
-                "writer": "✍",
-                "formatter": "▦",
-                "settings": "⚙",
-                "documentation": "?",
-            }
+            # Keep Sign Out in the same slot as an icon (below menu, above nav).
+            self.logout_button.configure(text=LOGOUT_ICON)
+            self.logout_button.normal_text = LOGOUT_ICON
+            self.logout_button.pack(fill=tk.X, padx=4, pady=(4, 12))
             for key, button in self._nav_buttons.items():
-                label = icons.get(key, "•")
+                label = COLLAPSED_NAV_ICONS.get(key, "•")
                 button.configure(text=label)
                 button.normal_text = label
         self._refresh_nav_styles()
@@ -147,18 +158,90 @@ class AppShell(tk.Frame):
 
     def _refresh_nav_styles(self) -> None:
         active = self.active_page.get()
+        collapsed = not self.expanded.get()
+        panel_bg = self.app.c("panel_bg")
+        text_fg = self.app.c("text_fg")
+        accent = self.app.c("accent")
+
+        # Keep hamburger crisp in both modes.
+        try:
+            self.menu_button.configure(
+                font=MENU_ICON_FONT,
+                relief=tk.FLAT,
+                bd=0,
+                highlightthickness=0,
+                bg=panel_bg,
+                fg=accent,
+            )
+        except tk.TclError:
+            pass
+
         for key, button in self._nav_buttons.items():
-            if key == active:
+            is_active = key == active
+            if collapsed:
                 button.configure(
-                    bg=self.app.c("accent"),
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                    padx=2,
+                    pady=8,
+                    font=COLLAPSED_ICON_FONT,
+                    bg=panel_bg,
+                    fg=accent if is_active else text_fg,
+                    activebackground=panel_bg,
+                    activeforeground=accent if is_active else text_fg,
+                )
+            elif is_active:
+                button.configure(
+                    relief=tk.RAISED,
+                    bd=1,
+                    padx=10,
+                    pady=5,
+                    font=EXPANDED_NAV_FONT,
+                    bg=accent,
                     fg="#ffffff",
-                    activebackground=self.app.c("accent"),
+                    activebackground=accent,
                     activeforeground="#ffffff",
                 )
             else:
                 button.configure(
+                    relief=tk.RAISED,
+                    bd=1,
+                    padx=10,
+                    pady=5,
+                    font=EXPANDED_NAV_FONT,
                     bg=self.app.c("button_bg"),
-                    fg=self.app.c("text_fg"),
+                    fg=text_fg,
                     activebackground=self.app.c("button_active"),
-                    activeforeground=self.app.c("text_fg"),
+                    activeforeground=text_fg,
                 )
+
+        # Sign Out: text button when expanded; flat icon when collapsed (same pack slot).
+        try:
+            if collapsed:
+                self.logout_button.configure(
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                    padx=2,
+                    pady=6,
+                    font=COLLAPSED_ICON_FONT,
+                    bg=panel_bg,
+                    fg=text_fg,
+                    activebackground=panel_bg,
+                    activeforeground=text_fg,
+                )
+            else:
+                self.logout_button.configure(
+                    relief=tk.RAISED,
+                    bd=1,
+                    padx=10,
+                    pady=5,
+                    font=EXPANDED_NAV_FONT,
+                    bg=self.app.c("button_bg"),
+                    fg=text_fg,
+                    activebackground=self.app.c("button_active"),
+                    activeforeground=text_fg,
+                )
+        except tk.TclError:
+            pass
