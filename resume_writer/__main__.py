@@ -8,8 +8,7 @@ os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 
 
 def main() -> None:
-    # Temporary: full UI still lives in the monolith until the UI move step.
-    from resume_writer_app import ResumeWriterApp
+    from resume_writer.ui.app import ResumeWriterApp
 
     ResumeWriterApp().mainloop()
 
