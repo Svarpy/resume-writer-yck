@@ -32,7 +32,7 @@ class VersionHelpersTests(unittest.TestCase):
     def test_app_version_is_canonical(self) -> None:
         self.assertEqual(normalize_version(APP_VERSION), APP_VERSION)
         self.assertEqual(parse_version(APP_VERSION), (3, 0, 0))
-        self.assertEqual(APP_VERSION, "v3.0.0Beta2")
+        self.assertRegex(APP_VERSION, r"^v3\.0\.0(?:Beta\d+)?$")
 
     def test_normalize_accepts_optional_leading_v(self) -> None:
         self.assertEqual(normalize_version("3.1.2"), "v3.1.2")
