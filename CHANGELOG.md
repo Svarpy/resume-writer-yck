@@ -7,6 +7,9 @@
 ## Unreleased
 
 - Pre–Sprint 2 package layout refactor (structure/hygiene only): application code under `resume_writer/` with layer rule `ui` → `render` → `formats` → `auth` → `paths`; thin `resume_writer_app.py` / `python -m resume_writer` entrypoints and root compat shims; unittest suite under `tests/` via `python -m unittest discover -s tests`.
+- In-app auto-updater (Sprint 2): weekly check against public GitHub Releases (`Svarpy/resume-writer-yck`); Install Now / Remind Later dialog; download → verify → replace install → relaunch; fail soft on network errors. Module: `resume_writer/update/`.
+- Release pipeline (Sprint 2): `APP_VERSION` + tag `vX.Y.Z` on `main` publishes `ResumeWritervX.Y.Z.app.zip` / `.exe.zip`; unsigned builds (Gatekeeper / SmartScreen note). Operator checklist: `RELEASE.md`.
+- Docs: auto-update UX + main-merge / release checklist documented in Notion Documentation (and local `documentation.md` / `CHANGELOG.md` while still retained).
 
 ## v3.0.0
 

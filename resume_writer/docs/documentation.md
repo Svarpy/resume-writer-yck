@@ -19,27 +19,33 @@ Resume Writer is a desktop application for creating a formatted `.docx` resume f
 - [Job Experience Input Tips](#job-experience-input-tips)
 - [Mac Installation](#mac-installation)
 - [Windows Installation](#windows-installation)
+- [Auto-Update (In-App)](#auto-update-in-app)
+- [Releases And Main-Merge Checklist](#releases-and-main-merge-checklist)
 - [Updating Dependencies](#updating-dependencies)
 - [Security Notes](#security-notes)
 - [Troubleshooting](#troubleshooting)
 
 ## Project Layout
 
-Pre–Sprint 2 package refactor on `genpubv3` (structure and hygiene only; no feature changes). Application code lives under the `resume_writer/` package. Repo-root modules such as `resume_writer_app.py`, `ui_*.py`, `user_auth.py`, `formats_store.py`, and `app_paths.py` are thin entrypoints or compatibility shims.
+Pre–Sprint 2 package refactor on `genpubv3` (structure and hygiene only; no feature changes). Application code lives under the `resume_writer/` package. Repo-root modules such as `resume_writer_app.py`, `ui_*.py`, `user_auth.py`, `formats_store.py`, and `app_paths.py` are thin entrypoints or compatibility shims. Sprint 2 adds `resume_writer/update/` (GitHub Releases auto-updater) and `RELEASE.md` (main-merge release checklist). Documented against `genpubv3` @ `c5aec13`.
 
 ### Package tree
 
 ```text
 resume_writer/
   __main__.py          # python -m resume_writer
-  constants.py
+  constants.py         # APP_VERSION (single source of truth)
   paths.py             # app data directory helpers
+  version.py           # version compare + Release asset names
   auth/                # user auth service
   docs/                # in-app documentation.md + loader
   formats/             # saved formats store / extract / models
   render/              # DOCX build, parse, template apply
   ui/                  # Tk shell, Writer, Formatter, Settings, auth UI
+  update/              # in-app GitHub Releases auto-updater
 tests/                 # unittest suite + fixtures
+RELEASE.md             # cut-a-release checklist (main merge + tag)
+.github/workflows/release.yml
 ```
 
 ### How to run
@@ -335,6 +341,78 @@ The generated executable will be available in:
 dist\Resume Writer\Resume Writer.exe
 ```
 
+## Auto-Update (In-App)
+
+Sprint 2 ships a weekly in-app updater that checks **public** GitHub Releases for the `Svarpy/resume-writer-yck` repository (no auth token).
+
+### When the check runs
+
+- After the main shell is ready, the app schedules a background check (`resume_writer/update/`).
+- Checks run at most once every **7 days** (state file `update_state.json` under the app data root).
+- Network / API failures fail soft: the previous install is kept, and the last-check timestamp is **not** advanced (retry on a later launch).
+
+### Install Now / Remind Later
+
+When a newer release has an OS-matching asset, the app shows an **Update Available** dialog:
+
+- **Install Now** — download → verify zip → replace the current install → cleanup → relaunch. On failure, the previous install is kept and an error is shown.
+- **Remind Later** — dismisses the dialog and records the check so the prompt will not reappear until the next weekly interval.
+
+Closing the dialog is treated like **Remind Later**.
+
+Draft and prerelease GitHub Releases are ignored. Only releases newer than the running `APP_VERSION` with the correct platform asset are offered.
+
+### Release asset names the updater expects
+
+| Platform | GitHub Release asset |
+| --- | --- |
+| macOS | `ResumeWritervX.Y.Z.app.zip` |
+| Windows | `ResumeWritervX.Y.Z.exe.zip` |
+
+Display name inside the binary/bundle: `Resume Writer vX.Y.Z`.
+
+## Releases And Main-Merge Checklist
+
+Canonical operator checklist: repo root **`RELEASE.md`** (keep that file in sync with this section).
+
+### Version contract
+
+- Single source of truth: `APP_VERSION` in `resume_writer/constants.py` (for example `v3.0.0`).
+- Package `__version__` must import from constants — do not hardcode a second version.
+- The git tag and GitHub Release **must** use the same `vX.Y.Z` string.
+
+### Cut a release (merge to `main`)
+
+1. On the release PR, bump `APP_VERSION`.
+2. Merge into `main` (Lead flow: land via `genpubv3` → review → `main`).
+3. On the **exact** `main` HEAD commit that contains that `APP_VERSION`, tag and push:
+
+```bash
+git checkout main && git pull
+git tag "vX.Y.Z"   # must equal APP_VERSION
+git push origin "vX.Y.Z"
+```
+
+4. Confirm the tag points at that HEAD (`git rev-list -n 1 "vX.Y.Z"` equals `git rev-parse HEAD`).
+5. Trigger the **Release** workflow on `main` (tag with the push, or **Actions → Release → Run workflow**).
+6. Confirm Release assets are named `ResumeWritervX.Y.Z.app.zip` and `ResumeWritervX.Y.Z.exe.zip`.
+
+### What CI does on `main`
+
+| Condition | Behavior |
+| --- | --- |
+| HEAD has tag matching `APP_VERSION` | Tests → macOS + Windows PyInstaller (onedir) → zip → GitHub Release |
+| HEAD has no matching `v*` tag | Tests only (no publish) |
+
+Feature / `genpubv3` pushes do not publish releases. Workflow: `.github/workflows/release.yml`. Helpers: `resume_writer/version.py`, `release/build_release.py`, `release/check_release_tag.py`.
+
+### Unsigned builds (Sprint 2)
+
+**Ship unsigned.** Signing / notarization is deferred (`release/sign_hooks.py`, `RESUME_WRITER_SIGN=1` later).
+
+- **macOS:** users may need Gatekeeper **Open** (right-click → Open) on first launch.
+- **Windows:** users may need SmartScreen **More info** → Run anyway on first launch.
+
 ## Updating Dependencies
 
 Use a virtual environment before installing or updating dependencies.
@@ -354,6 +432,7 @@ After updating dependencies, run the app and generate a test `.docx` before usin
 - Do not paste private or sensitive content into unknown third-party tools.
 - Generated resumes are written locally to the selected output path.
 - Review the generated `.docx` before sending it to employers.
+- Official installers are published as **unsigned** GitHub Release zips in Sprint 2; prefer downloading from the `Svarpy/resume-writer-yck` Releases page. Expect Gatekeeper / SmartScreen prompts on first launch (see Releases And Main-Merge Checklist).
 
 ## Troubleshooting
 
@@ -391,3 +470,17 @@ Role Name | January 2025 - May 2026
 ```
 
 Pasted dates should be preserved. Fallback dates are only used when a known company or role line does not include a date.
+
+### Update Check Never Appears
+
+- The weekly interval may not have elapsed yet (`update_state.json` under the app data directory).
+- There may be no newer public release, or the release may lack the OS-specific asset name.
+- Network errors fail soft; try again on a later launch.
+
+### macOS Blocks The Downloaded App / Update
+
+Right-click the app in Finder and choose **Open** (Gatekeeper). Sprint 2 builds are unsigned.
+
+### Windows SmartScreen Blocks The App
+
+Choose **More info** → **Run anyway**. Sprint 2 builds are unsigned.
