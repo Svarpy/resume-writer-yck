@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -21,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from resume_writer.version import (  # noqa: E402
     APP_VERSION,
+    compact_version_slug,
     display_name,
     macos_asset_name,
     pyinstaller_name,
@@ -33,18 +35,24 @@ DIST = ROOT / "dist"
 RELEASE_OUT = ROOT / "release" / "out"
 
 
+def _is_windows() -> bool:
+    return os.name == "nt" or platform.system().lower().startswith("win")
+
+
+def _bundle_name() -> str:
+    """PyInstaller --name: human title on macOS; compact slug on Windows."""
+    if _is_windows():
+        return compact_version_slug()
+    return pyinstaller_name()
+
+
 def _add_data_arg() -> str:
-    """Return PyInstaller --add-data value (relative paths; OS pathsep)."""
-    sep = ";" if os.name == "nt" else ":"
-    # Prefer repo-relative paths — absolute Windows paths have bitten CI before.
-    rel = Path("resume_writer") / "docs" / "documentation.md"
-    return f"{rel.as_posix()}{sep}resume_writer/docs"
+    sep = ";" if _is_windows() else ":"
+    return f"{DOC_SRC}{sep}resume_writer/docs"
 
 
 def run_pyinstaller() -> Path:
     """Run PyInstaller onedir/windowed build; return the primary artifact path."""
-    import subprocess
-
     try:
         import PyInstaller  # noqa: F401
     except ImportError as exc:  # pragma: no cover - CI installs deps
@@ -52,17 +60,10 @@ def run_pyinstaller() -> Path:
             "PyInstaller is required. Install with: pip install -r requirements.txt"
         ) from exc
 
-    # macOS keeps the human-facing "Resume Writer vX.Y.Z" bundle name.
-    # Windows CI is unreliable with spaces in --name; use the compact slug there.
-    name = pyinstaller_name()
-    if os.name == "nt" or platform.system().lower().startswith("win"):
-        from resume_writer.version import compact_version_slug
-
-        name = compact_version_slug()
-
     if not DOC_SRC.is_file():
         raise SystemExit(f"Missing documentation data file: {DOC_SRC}")
 
+    name = _bundle_name()
     cmd = [
         sys.executable,
         "-m",
@@ -78,8 +79,6 @@ def run_pyinstaller() -> Path:
         f"--workpath={ROOT / 'build'}",
         f"--specpath={ROOT / 'build'}",
         "--hidden-import=bcrypt",
-        "--hidden-import=_cffi_backend",
-        "--collect-all=bcrypt",
         "--hidden-import=docx",
     ]
     print(f"Building {name!r} (APP_VERSION={APP_VERSION}) …", flush=True)
@@ -97,8 +96,12 @@ def run_pyinstaller() -> Path:
 
     folder = DIST / name
     if not folder.is_dir():
-        listing = ", ".join(sorted(p.name for p in DIST.iterdir())) if DIST.is_dir() else "(no dist/)"
-        raise SystemExit(f"Expected onedir folder missing: {folder}; dist contains: {listing}")
+        listing = (
+            ", ".join(sorted(p.name for p in DIST.iterdir())) if DIST.is_dir() else "(no dist/)"
+        )
+        raise SystemExit(
+            f"Expected onedir folder missing: {folder}; dist contains: {listing}"
+        )
     return folder
 
 
@@ -119,17 +122,16 @@ def zip_artifact(artifact: Path | None = None) -> Path:
     """Zip the built artifact into the Release asset name for this OS."""
     system = platform.system().lower()
     RELEASE_OUT.mkdir(parents=True, exist_ok=True)
+    name = _bundle_name()
 
     if system == "darwin":
-        source = artifact or (DIST / f"{pyinstaller_name()}.app")
+        source = artifact or (DIST / f"{name}.app")
         dest = RELEASE_OUT / macos_asset_name()
-    elif system == "windows" or os.name == "nt":
-        from resume_writer.version import compact_version_slug
-
-        source = artifact or (DIST / compact_version_slug())
+    elif _is_windows():
+        source = artifact or (DIST / name)
         dest = RELEASE_OUT / windows_asset_name()
     else:
-        source = artifact or (DIST / pyinstaller_name())
+        source = artifact or (DIST / name)
         dest = RELEASE_OUT / f"{windows_asset_name().replace('.exe.zip', '.linux.zip')}"
 
     if not source.exists():
@@ -164,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_names:
         print(f"APP_VERSION={APP_VERSION}")
         print(f"display_name={display_name()}")
+        print(f"bundle_name={_bundle_name()}")
         print(f"macos_asset={macos_asset_name()}")
         print(f"windows_asset={windows_asset_name()}")
         return 0

@@ -110,11 +110,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -c "import PyInstaller, bcrypt, docx; print('PyInstaller', PyInstaller.__version__)"
 
       - name: Build and zip
         env:
           RESUME_WRITER_SIGN: "0"
-        run: python -u release/build_release.py
+        shell: cmd
+        run: python -u release\build_release.py
 
       - name: Upload Windows build log on failure
         if: failure()
