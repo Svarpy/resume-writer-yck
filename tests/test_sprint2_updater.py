@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -258,6 +259,179 @@ class UpdateApplyHelpersTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 replace_install(missing, install)
             self.assertTrue((install / "keep.txt").is_file())
+
+
+class ManualUpdateCheckTests(unittest.TestCase):
+    """Settings "Check for Updates" path ignores the weekly gate."""
+
+    def setUp(self) -> None:
+        save_state({})
+        # Simulate a recent automatic check so is_check_due() is False.
+        record_check_now(when=datetime(2026, 9, 23, tzinfo=timezone.utc))
+        self.assertFalse(
+            is_check_due(now=datetime(2026, 9, 24, tzinfo=timezone.utc))
+        )
+
+    def _fake_app(self):
+        """Minimal stand-in with synchronous ``after`` and ``winfo_exists``."""
+
+        class FakeApp:
+            def __init__(self) -> None:
+                self._pending: list = []
+
+            def after(self, _ms, callback=None, *args):  # noqa: ANN001
+                if callback is not None:
+                    self._pending.append((callback, args))
+                return None
+
+            def winfo_exists(self) -> bool:
+                return True
+
+            def drain(self, *, rounds: int = 40) -> None:
+                for _ in range(rounds):
+                    if not self._pending:
+                        return
+                    callback, args = self._pending.pop(0)
+                    callback(*args)
+
+        return FakeApp()
+
+    @staticmethod
+    def _run_thread_inline():
+        """Patch ``threading.Thread`` so ``start()`` runs the target immediately."""
+
+        class ImmediateThread:
+            def __init__(self, target=None, daemon=None, args=(), kwargs=None):  # noqa: ANN001
+                self._target = target
+                self._args = args or ()
+                self._kwargs = kwargs or {}
+
+            def start(self) -> None:
+                if self._target is not None:
+                    self._target(*self._args, **self._kwargs)
+
+        return ImmediateThread
+
+    def test_manual_check_up_to_date_ignores_weekly_gate(self) -> None:
+        from resume_writer.update import service as update_service
+
+        app = self._fake_app()
+        infos: list[tuple[str, str]] = []
+
+        with (
+            unittest.mock.patch.object(
+                update_service.threading,
+                "Thread",
+                self._run_thread_inline(),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "check_for_available_update",
+                return_value=None,
+            ) as check_mock,
+            unittest.mock.patch.object(
+                update_service,
+                "_show_info",
+                side_effect=lambda _p, title, message: infos.append((title, message)),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_show_error",
+                side_effect=lambda *_a, **_k: self.fail("unexpected error dialog"),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_handle_available_update",
+                side_effect=lambda *_a, **_k: self.fail("unexpected install prompt"),
+            ),
+        ):
+            update_service.manual_update_check(app)
+            app.drain()
+
+        check_mock.assert_called_once()
+        self.assertEqual(len(infos), 1)
+        self.assertIn("up to date", infos[0][0].lower())
+
+    def test_manual_check_offers_install_when_update_available(self) -> None:
+        from resume_writer.update import service as update_service
+        from resume_writer.update.check import AvailableUpdate
+
+        app = self._fake_app()
+        update = AvailableUpdate(
+            version="v9.9.9",
+            tag_name="v9.9.9",
+            asset_name="ResumeWriterv9.9.9.app.zip",
+            download_url="https://example/u",
+        )
+        handled: list = []
+
+        with (
+            unittest.mock.patch.object(
+                update_service.threading,
+                "Thread",
+                self._run_thread_inline(),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "check_for_available_update",
+                return_value=update,
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_handle_available_update",
+                side_effect=lambda _app, found: handled.append(found),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_show_info",
+                side_effect=lambda *_a, **_k: self.fail("unexpected info dialog"),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_show_error",
+                side_effect=lambda *_a, **_k: self.fail("unexpected error dialog"),
+            ),
+        ):
+            update_service.manual_update_check(app)
+            app.drain()
+
+        self.assertEqual(handled, [update])
+
+    def test_manual_check_shows_error_on_failure(self) -> None:
+        from resume_writer.update import service as update_service
+        from resume_writer.update.check import UpdateCheckError
+
+        app = self._fake_app()
+        errors: list[tuple[str, str]] = []
+
+        with (
+            unittest.mock.patch.object(
+                update_service.threading,
+                "Thread",
+                self._run_thread_inline(),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "check_for_available_update",
+                side_effect=UpdateCheckError("offline"),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_show_error",
+                side_effect=lambda _p, title, message: errors.append((title, message)),
+            ),
+            unittest.mock.patch.object(
+                update_service,
+                "_show_info",
+                side_effect=lambda *_a, **_k: self.fail("unexpected info dialog"),
+            ),
+        ):
+            update_service.manual_update_check(app)
+            app.drain()
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("failed", errors[0][0].lower())
+        self.assertIn("offline", errors[0][1])
 
 
 if __name__ == "__main__":
