@@ -47,7 +47,14 @@ def run_pyinstaller() -> Path:
             "PyInstaller is required. Install with: pip install -r requirements.txt"
         ) from exc
 
+    # macOS keeps the human-facing "Resume Writer vX.Y.Z" bundle name.
+    # Windows CI is unreliable with spaces in --name; use the compact slug there.
     name = pyinstaller_name()
+    if os.name == "nt" or platform.system().lower().startswith("win"):
+        from resume_writer.version import compact_version_slug
+
+        name = compact_version_slug()
+
     args = [
         str(ROOT / "resume_writer_app.py"),
         "--noconfirm",
@@ -59,9 +66,22 @@ def run_pyinstaller() -> Path:
         f"--distpath={DIST}",
         f"--workpath={ROOT / 'build'}",
         f"--specpath={ROOT / 'build'}",
+        # bcrypt ships native libs that PyInstaller often misses on Windows.
+        "--hidden-import=bcrypt",
+        "--hidden-import=_cffi_backend",
+        "--collect-all=bcrypt",
+        "--hidden-import=docx",
+        "--hidden-import=lxml",
     ]
-    print(f"Building {name!r} (APP_VERSION={APP_VERSION}) …")
-    pyimain.run(args)
+    print(f"Building {name!r} (APP_VERSION={APP_VERSION}) …", flush=True)
+    print("PyInstaller args:", args, flush=True)
+    try:
+        pyimain.run(args)
+    except SystemExit as exc:
+        # PyInstaller calls sys.exit(0) on success; re-raise non-zero.
+        code = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
+        if code not in (0, None):
+            raise SystemExit(f"PyInstaller failed with exit code {code}") from exc
 
     system = platform.system().lower()
     if system == "darwin":
@@ -72,7 +92,8 @@ def run_pyinstaller() -> Path:
 
     folder = DIST / name
     if not folder.is_dir():
-        raise SystemExit(f"Expected onedir folder missing: {folder}")
+        listing = ", ".join(sorted(p.name for p in DIST.iterdir())) if DIST.is_dir() else "(no dist/)"
+        raise SystemExit(f"Expected onedir folder missing: {folder}; dist contains: {listing}")
     return folder
 
 
@@ -92,23 +113,24 @@ def _zip_tree(source: Path, dest_zip: Path) -> None:
 def zip_artifact(artifact: Path | None = None) -> Path:
     """Zip the built artifact into the Release asset name for this OS."""
     system = platform.system().lower()
-    name = display_name()
     RELEASE_OUT.mkdir(parents=True, exist_ok=True)
 
     if system == "darwin":
-        source = artifact or (DIST / f"{name}.app")
+        source = artifact or (DIST / f"{pyinstaller_name()}.app")
         dest = RELEASE_OUT / macos_asset_name()
     elif system == "windows" or os.name == "nt":
-        source = artifact or (DIST / name)
+        from resume_writer.version import compact_version_slug
+
+        source = artifact or (DIST / compact_version_slug())
         dest = RELEASE_OUT / windows_asset_name()
     else:
-        source = artifact or (DIST / name)
+        source = artifact or (DIST / pyinstaller_name())
         dest = RELEASE_OUT / f"{windows_asset_name().replace('.exe.zip', '.linux.zip')}"
 
     if not source.exists():
         raise SystemExit(f"Nothing to zip; missing {source}")
 
-    print(f"Zipping {source} → {dest}")
+    print(f"Zipping {source} → {dest}", flush=True)
     _zip_tree(source, dest)
     return dest
 
