@@ -239,6 +239,87 @@ def schedule_launch_update_check(app: Any, *, delay_ms: int = 900) -> None:
         return
 
 
+def manual_update_check(app: Any) -> None:
+    """Settings "Check for Updates": ignore the 7-day gate; fail soft with dialogs.
+
+    Runs the network check on a background thread, then on the UI thread:
+    - update available → Install Now / Remind Later (same as launch path)
+    - up to date → info dialog
+    - error → error dialog (no crash)
+    """
+
+    if getattr(app, "_rw_manual_update_check_busy", False):
+        return
+    app._rw_manual_update_check_busy = True
+
+    result: dict[str, Any] = {"update": None, "error": None, "done": False}
+
+    def worker() -> None:
+        try:
+            result["update"] = check_for_available_update()
+        except UpdateCheckError as exc:
+            result["error"] = str(exc) or "Could not reach the update server."
+        except Exception as exc:  # noqa: BLE001 — fail soft for Settings UX
+            result["error"] = str(exc) or "Update check failed."
+            traceback.print_exc()
+        finally:
+            result["done"] = True
+
+    def finish() -> None:
+        app._rw_manual_update_check_busy = False
+        try:
+            if not app.winfo_exists():
+                return
+        except Exception:
+            return
+
+        if result["error"]:
+            _show_error(
+                app,
+                "Update check failed",
+                f"Could not check for updates.\n\n{result['error']}",
+            )
+            return
+
+        update = result["update"]
+        if update is None:
+            try:
+                record_check_now()
+            except Exception:
+                pass
+            _show_info(
+                app,
+                "You're up to date",
+                f"Resume Writer {APP_VERSION} is the latest version.",
+            )
+            return
+
+        try:
+            _handle_available_update(app, update)
+        except Exception:
+            traceback.print_exc()
+            _show_error(
+                app,
+                "Update check failed",
+                "An unexpected error occurred while offering the update.",
+            )
+
+    def poll() -> None:
+        if not result["done"]:
+            try:
+                app.after(150, poll)
+            except Exception:
+                app._rw_manual_update_check_busy = False
+            return
+        finish()
+
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        app.after(150, poll)
+    except Exception:
+        app._rw_manual_update_check_busy = False
+
+
 def _background_check(app: Any) -> None:
     try:
         if not is_check_due():

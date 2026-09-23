@@ -1,6 +1,7 @@
 """Resolve whether HEAD should publish a GitHub Release.
 
-Prints ``should_release=true|false`` and ``version=vX.Y.Z`` for Actions.
+Prints ``should_release=true|false`` and ``version=vX.Y.Z`` (or
+``vX.Y.ZBetaN``) for Actions.
 
 A release is published only when a git tag equal to ``APP_VERSION`` points at
 the current HEAD commit.

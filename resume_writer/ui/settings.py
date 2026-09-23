@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import messagebox
-from typing import Callable
+from typing import Callable, Optional
 
 from resume_writer import auth as user_auth
 
@@ -16,10 +16,12 @@ class SettingsPage(tk.Frame):
         *,
         app,
         on_theme_toggle: Callable[[], None],
+        on_check_updates: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent, bg=app.c("app_bg"), padx=16, pady=16)
         self.app = app
         self.on_theme_toggle = on_theme_toggle
+        self.on_check_updates = on_check_updates
 
         self.username_var = tk.StringVar()
         self.display_name_var = tk.StringVar()
@@ -75,6 +77,20 @@ class SettingsPage(tk.Frame):
             row=2, column=1, sticky="w", pady=(4, 0)
         )
 
+        updates = self.app._section(self, "Updates")
+        updates.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self.app._label(
+            updates,
+            "Check GitHub Releases for a newer Resume Writer build (ignores the weekly auto-check timer).",
+            muted=True,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self.check_updates_button = self.app._button(
+            updates,
+            "Check for Updates",
+            self._check_for_updates,
+        )
+        self.check_updates_button.grid(row=1, column=0, sticky="w")
+
     def refresh(self) -> None:
         try:
             profile = user_auth.get_current_profile()
@@ -128,3 +144,15 @@ class SettingsPage(tk.Frame):
         self.old_password_var.set("")
         self.new_password_var.set("")
         messagebox.showinfo("Change Password", "Password updated.")
+
+    def _check_for_updates(self) -> None:
+        if self.on_check_updates is not None:
+            self.on_check_updates()
+            return
+        # Fallback if the app omitted the callback.
+        try:
+            from resume_writer.update import manual_update_check
+
+            manual_update_check(self.app)
+        except Exception as exc:  # noqa: BLE001 — Settings must not crash
+            messagebox.showerror("Update check failed", str(exc))

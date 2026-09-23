@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from resume_writer.update.check import AvailableUpdate, check_for_available_update
 from resume_writer.update.service import (
+    manual_update_check,
     run_install_now,
     schedule_launch_update_check,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "CHECK_INTERVAL_DAYS",
     "check_for_available_update",
     "is_check_due",
+    "manual_update_check",
     "record_check_now",
     "run_install_now",
     "schedule_launch_update_check",

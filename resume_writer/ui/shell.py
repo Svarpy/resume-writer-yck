@@ -79,11 +79,18 @@ class AppShell(tk.Frame):
         self.brand_label.configure(font=("Arial", 12, "bold"))
         self.brand_label.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.logout_button = self.app._button(self.sidebar, "Sign Out", self.on_logout)
-        self.logout_button.pack(fill=tk.X, padx=8, pady=(4, 12))
+        # Bottom chrome first so Sign Out stays at the foot (expanded + collapsed).
+        self.bottom = self.app._track(
+            tk.Frame(self.sidebar, bg=self.app.c("panel_bg")),
+            "panel_frame",
+        )
+        self.bottom.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self.user_label = self.app._label(self.sidebar, "", muted=True)
-        self.user_label.pack(fill=tk.X, padx=12, pady=(0, 8))
+        self.logout_button = self.app._button(self.bottom, "Sign Out", self.on_logout)
+        self.logout_button.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(4, 12))
+
+        self.user_label = self.app._label(self.bottom, "", muted=True)
+        self.user_label.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 8))
 
         nav = self.app._track(tk.Frame(self.sidebar, bg=self.app.c("panel_bg")), "panel_frame")
         nav.pack(fill=tk.BOTH, expand=True, padx=4)
@@ -120,18 +127,19 @@ class AppShell(tk.Frame):
             self.brand_label.pack(side=tk.LEFT, padx=(8, 0))
             self.logout_button.configure(text="Sign Out")
             self.logout_button.normal_text = "Sign Out"
-            self.logout_button.pack(fill=tk.X, padx=8, pady=(4, 12))
-            self.user_label.pack(fill=tk.X, padx=12, pady=(0, 8))
+            # Pack side=BOTTOM first so logout stays under the user label.
+            self.logout_button.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(4, 12))
+            self.user_label.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 8))
             for key, title in NAV_ITEMS:
                 self._nav_buttons[key].configure(text=title)
                 self._nav_buttons[key].normal_text = title
         else:
             self.brand_label.pack_forget()
             self.user_label.pack_forget()
-            # Keep Sign Out in the same slot as an icon (below menu, above nav).
+            # Collapsed: ↪ icon remains packed at the bottom of the sidebar.
             self.logout_button.configure(text=LOGOUT_ICON)
             self.logout_button.normal_text = LOGOUT_ICON
-            self.logout_button.pack(fill=tk.X, padx=4, pady=(4, 12))
+            self.logout_button.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(4, 12))
             for key, button in self._nav_buttons.items():
                 label = COLLAPSED_NAV_ICONS.get(key, "•")
                 button.configure(text=label)

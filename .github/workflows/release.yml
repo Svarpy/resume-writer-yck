@@ -1,12 +1,14 @@
 name: Release
 
-# Sprint 2: publish only from main. Feature / genpubv3 pushes do not run this.
+# TEMPORARY (Beta2 test): publish from genpubv3 so the Beta2 cut can exercise
+# the full Actions → GitHub Release path without merging to main.
+# Revert the push branch to `main` after the Beta2 test is done (see RELEASE.md).
 on:
   push:
     branches:
-      - main
+      - genpubv3
   workflow_dispatch:
-    # Manual re-run after tagging main HEAD (see RELEASE.md).
+    # Manual re-run after tagging genpubv3 HEAD (see RELEASE.md).
 
 permissions:
   contents: write
@@ -148,7 +150,9 @@ jobs:
           {
             echo "Resume Writer ${VERSION}"
             echo ""
-            echo "Built by GitHub Actions from main (PyInstaller onedir, unsigned)."
+            echo "Built by GitHub Actions from genpubv3 (PyInstaller onedir, unsigned)."
+            echo "TEMPORARY Beta2 test branch trigger — not a GitHub prerelease flag"
+            echo "(normal Release so the in-app updater can see it)."
             echo ""
             echo "Assets:"
             echo "- macOS: ResumeWriter${VERSION}.app.zip"
@@ -156,6 +160,8 @@ jobs:
             echo ""
             echo "See RELEASE.md for the cut checklist and signing status."
           } > release-notes.md
+          # Intentionally NOT --prerelease: updater skips GitHub prerelease=true.
+          # Beta2 uses a normal Release so Check for updates works end-to-end.
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists; uploading any missing assets."
             gh release upload "$VERSION" release-assets/* --clobber

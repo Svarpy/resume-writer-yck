@@ -150,15 +150,16 @@ class Sprint1UiBugfixTests(unittest.TestCase):
         shell.on_logout = _tracked_logout
         shell.logout_button.button_command = _tracked_logout
 
-        # Expanded: text button
+        # Expanded: text button packed at bottom of sidebar chrome
         shell.set_expanded(True)
         _pump(self.app)
         self.assertEqual(shell.logout_button.cget("text"), "Sign Out")
         self.assertEqual(shell.logout_button.normal_text, "Sign Out")
         self.assertEqual(int(shell.sidebar.cget("width")), SIDEBAR_EXPANDED_PX)
         self.assertEqual(str(shell.logout_button.cget("relief")), "raised")
+        self.assertEqual(shell.logout_button.pack_info().get("side", "top"), "bottom")
 
-        # Collapse: icon remains packed in same vertical slot (below menu, above nav)
+        # Collapse: icon remains packed at bottom of sidebar (below expanding nav)
         shell.set_expanded(False)
         _pump(self.app)
         self.assertFalse(shell.expanded.get())
@@ -170,7 +171,7 @@ class Sprint1UiBugfixTests(unittest.TestCase):
         self.assertEqual(int(shell.logout_button.cget("bd")), 0)
 
         pack_info = shell.logout_button.pack_info()
-        self.assertEqual(pack_info.get("side", "top"), "top")
+        self.assertEqual(pack_info.get("side", "top"), "bottom")
 
         # Click still triggers logout flow (same handler path as Button-1).
         self.assertEqual(str(shell.logout_button.cget("state")), "normal")

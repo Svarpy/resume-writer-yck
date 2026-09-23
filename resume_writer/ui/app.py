@@ -120,6 +120,7 @@ class ResumeWriterApp(tk.Tk):
             self.shell.content,
             app=self,
             on_theme_toggle=self._toggle_theme,
+            on_check_updates=self._manual_update_check,
         )
         self.documentation_page = DocumentationPage(self.shell.content, app=self)
 
@@ -170,6 +171,15 @@ class ResumeWriterApp(tk.Tk):
             schedule_launch_update_check(self)
         except Exception:
             # Updater must never block or crash sign-in / shell entry.
+            pass
+
+    def _manual_update_check(self) -> None:
+        """Settings: check now, ignoring the weekly gate (fail soft)."""
+        try:
+            from resume_writer.update import manual_update_check
+
+            manual_update_check(self)
+        except Exception:
             pass
 
     def _logout(self) -> None:

@@ -1,47 +1,67 @@
 # Release checklist (Sprint 2)
 
 Single source of truth: ``APP_VERSION`` in ``resume_writer/constants.py``
-(e.g. ``v3.0.0``). The git tag and GitHub Release **must** use the same
-``vX.Y.Z`` string.
+(e.g. ``v3.0.0`` or ``v3.0.0Beta2``). The git tag and GitHub Release **must**
+use the same string (``vX.Y.Z`` or ``vX.Y.ZBetaN``).
 
-## Cut a release (merge to ``main``)
+## TEMPORARY — Beta2 test on ``genpubv3``
 
-1. On the release PR, bump ``APP_VERSION`` (and keep package ``__version__``
+For the **v3.0.0Beta2** test cut only, `.github/workflows/release.yml` triggers
+on pushes to **``genpubv3``** (not ``main``). Do **not** merge this Beta2 cut
+to ``main``. After the test, revert the workflow branch filter to ``main``.
+
+Beta2 publishes a **normal** GitHub Release (no ``prerelease: true`` flag) so
+the in-app updater — which skips GitHub prereleases — can install it. The tag
+form ``v3.0.0Beta2`` is still a pre-release *version* relative to ``v3.0.0``.
+
+Asset example: ``ResumeWriterv3.0.0Beta2.app.zip``.
+
+## Cut a release (Beta2 test: merge to ``genpubv3``)
+
+1. On the release branch, bump ``APP_VERSION`` (and keep package ``__version__``
    imported from constants — do not hardcode a second version).
-2. Merge the PR into ``main`` (Lead flow: land via ``genpubv3`` → review → ``main``).
-3. On the **exact** ``main`` HEAD commit that contains that ``APP_VERSION``:
+2. Merge into ``genpubv3`` (temporary Beta2 path; production cuts use ``main``).
+3. On the **exact** ``genpubv3`` HEAD commit that contains that ``APP_VERSION``:
 
    ```bash
-   git checkout main && git pull
-   git tag "vX.Y.Z"   # must equal APP_VERSION, e.g. v3.0.0
-   git push origin "vX.Y.Z"
+   git checkout genpubv3 && git pull
+   git tag "vX.Y.ZBetaN"   # must equal APP_VERSION, e.g. v3.0.0Beta2
+   git push origin genpubv3
+   git push origin "vX.Y.ZBetaN"
    ```
 
 4. Ensure the tag points at that HEAD (not an older commit):
 
    ```bash
-   git rev-list -n 1 "vX.Y.Z"   # must equal git rev-parse HEAD
+   git rev-list -n 1 "v3.0.0Beta2"   # must equal git rev-parse HEAD
    ```
 
-5. Trigger the **Release** workflow on ``main``:
-   - Prefer tagging **before** / **with** the push that updates ``main`` when
-     cutting locally (`git push origin main --tags`), **or**
-   - After tagging a commit already on ``main``, use **Actions → Release →
+5. Trigger the **Release** workflow on ``genpubv3``:
+   - Prefer tagging **before** / **with** the push that updates ``genpubv3``
+     when cutting locally, **or**
+   - After tagging a commit already on ``genpubv3``, use **Actions → Release →
      Run workflow** (`workflow_dispatch`).
 
 6. Confirm the Release assets are named:
 
-   - `ResumeWritervX.Y.Z.app.zip`
-   - `ResumeWritervX.Y.Z.exe.zip`
+   - `ResumeWritervX.Y.ZBetaN.app.zip` (e.g. `ResumeWriterv3.0.0Beta2.app.zip`)
+   - `ResumeWritervX.Y.ZBetaN.exe.zip`
 
-Display name inside the binary/bundle: `Resume Writer vX.Y.Z`.
+Display name inside the binary/bundle: `Resume Writer vX.Y.ZBetaN`.
+
+## Production cut (after Beta2 — revert trigger to ``main``)
+
+1. Revert workflow ``on.push.branches`` to ``main``.
+2. Bump ``APP_VERSION`` to a plain ``vX.Y.Z``.
+3. Merge via ``genpubv3`` → review → ``main``, then tag ``main`` HEAD with the
+   same ``APP_VERSION`` string and push the tag.
 
 ## What CI does
 
-| Condition on ``main`` push | Behavior |
+| Condition on ``genpubv3`` push (temporary) | Behavior |
 | --- | --- |
 | HEAD has tag ``APP_VERSION`` | Tests → macOS + Windows PyInstaller (onedir) → zip → GitHub Release |
-| HEAD has **no** matching ``v*`` tag | Tests only (no publish) |
+| HEAD has **no** matching tag | Tests only (no publish) |
 
 Workflow file: `.github/workflows/release.yml`  
 Helpers: `resume_writer/version.py`, `release/build_release.py`,

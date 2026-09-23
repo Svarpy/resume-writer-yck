@@ -1,7 +1,11 @@
 """Version contract and GitHub Release asset naming helpers.
 
 ``APP_VERSION`` in ``resume_writer.constants`` is the single source of truth.
-Git tags and Release assets must use the same ``vX.Y.Z`` string.
+Git tags and Release assets must use the same version string.
+
+Canonical forms:
+- Release: ``vX.Y.Z`` (e.g. ``v3.0.0``)
+- Beta: ``vX.Y.ZBetaN`` (e.g. ``v3.0.0Beta2``)
 
 Shared by the release pipeline and the in-app updater.
 """
@@ -32,40 +36,53 @@ __all__ = [
     "asset_name_for_platform",
 ]
 
-# Canonical release tags: leading v + three numeric components (e.g. v3.0.0).
-VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# Canonical tags: vX.Y.Z or vX.Y.ZBetaN (e.g. v3.0.0, v3.0.0Beta2).
+VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:Beta(\d+))?$")
 
-# Looser parse for compare (optional leading v; optional pre-release label).
+# Looser parse for compare (optional leading v; BetaN or hyphen/plus label).
 _LOOSE_VERSION_RE = re.compile(
-    r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[-+](?P<label>.+))?$",
+    r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
+    r"(?:Beta(?P<beta>\d+)|[-+](?P<label>.+))?$",
     re.IGNORECASE,
 )
 
 
 def normalize_version(version: str) -> str:
-    """Return a canonical ``vX.Y.Z`` string (release / tag form).
+    """Return a canonical ``vX.Y.Z`` or ``vX.Y.ZBetaN`` string.
 
-    Accepts ``v3.0.0`` or ``3.0.0``. Rejects labels and partial versions.
+    Accepts optional leading ``v``. Rejects hyphenated labels (e.g. ``3.0.0-beta``)
+    and partial versions.
     """
     text = (version or "").strip()
     if not text:
         raise ValueError("Version string is empty")
     if not text.startswith("v"):
         text = f"v{text}"
-    if not VERSION_RE.match(text):
-        raise ValueError(f"Invalid version {version!r}; expected vX.Y.Z")
-    return text
+    # Preserve Beta casing in the canonical form.
+    match = re.match(
+        r"^v(\d+)\.(\d+)\.(\d+)(?:[Bb]eta(\d+))?$",
+        text,
+    )
+    if not match:
+        raise ValueError(
+            f"Invalid version {version!r}; expected vX.Y.Z or vX.Y.ZBetaN"
+        )
+    major, minor, patch, beta = match.groups()
+    if beta is not None:
+        return f"v{major}.{minor}.{patch}Beta{beta}"
+    return f"v{major}.{minor}.{patch}"
 
 
 def parse_version(version: str) -> Tuple[int, int, int]:
-    """Parse ``vX.Y.Z`` (or ``X.Y.Z``) into ``(major, minor, patch)``."""
+    """Parse ``vX.Y.Z`` / ``vX.Y.ZBetaN`` into ``(major, minor, patch)``."""
     normalized = normalize_version(version)
     match = VERSION_RE.match(normalized)
     assert match is not None
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
 
-def _parse_loose(version: str) -> Tuple[int, int, int, str]:
+def _parse_loose(version: str) -> Tuple[int, int, int, Optional[int], str]:
+    """Return ``(major, minor, patch, beta_n|None, other_label)``."""
     text = (version or "").strip()
     if not text:
         raise ValueError("Version string is empty")
@@ -76,10 +93,13 @@ def _parse_loose(version: str) -> Tuple[int, int, int, str]:
         match = _LOOSE_VERSION_RE.match(normalized)
         if not match:
             raise ValueError(f"Unrecognized version string: {version!r}")
+    beta_raw = match.group("beta")
+    beta_n = int(beta_raw) if beta_raw is not None else None
     return (
         int(match.group("major")),
         int(match.group("minor")),
         int(match.group("patch")),
+        beta_n,
         (match.group("label") or "").lower(),
     )
 
@@ -88,24 +108,49 @@ def compare_versions(left: str, right: str) -> int:
     """Compare two versions.
 
     Returns ``-1`` if left < right, ``0`` if equal, ``1`` if left > right.
-    Labeled / pre-release builds sort before the same numeric release.
+
+    Ordering for the same ``X.Y.Z``:
+    ``…Beta1`` < ``…Beta2`` < ``…`` (plain release).
+    Hyphenated / ``+`` labels also sort before the plain release.
     """
-    l_maj, l_min, l_pat, l_label = _parse_loose(left)
-    r_maj, r_min, r_pat, r_label = _parse_loose(right)
+    l_maj, l_min, l_pat, l_beta, l_label = _parse_loose(left)
+    r_maj, r_min, r_pat, r_beta, r_label = _parse_loose(right)
     for l_part, r_part in ((l_maj, r_maj), (l_min, r_min), (l_pat, r_pat)):
         if l_part < r_part:
             return -1
         if l_part > r_part:
             return 1
-    if l_label == r_label:
+
+    l_pre = l_beta is not None or bool(l_label)
+    r_pre = r_beta is not None or bool(r_label)
+    if not l_pre and not r_pre:
         return 0
-    if not l_label:
+    if not l_pre:
         return 1
-    if not r_label:
+    if not r_pre:
         return -1
-    if l_label < r_label:
+
+    # Both are pre-release: prefer numeric BetaN when present on both.
+    if l_beta is not None and r_beta is not None:
+        if l_beta < r_beta:
+            return -1
+        if l_beta > r_beta:
+            return 1
+        return 0
+    if l_beta is not None and r_beta is None:
+        # BetaN vs hyphen label: treat Beta as "beta{N}" for string order.
+        l_key = f"beta{l_beta}"
+        r_key = r_label
+    elif r_beta is not None and l_beta is None:
+        l_key = l_label
+        r_key = f"beta{r_beta}"
+    else:
+        l_key = l_label
+        r_key = r_label
+
+    if l_key < r_key:
         return -1
-    if l_label > r_label:
+    if l_key > r_key:
         return 1
     return 0
 
@@ -122,7 +167,7 @@ def version_is_newer(candidate: str, current: str) -> bool:
 
 
 def display_name(version: Optional[str] = None) -> str:
-    """Human-facing app name, e.g. ``Resume Writer v3.0.0``."""
+    """Human-facing app name, e.g. ``Resume Writer v3.0.0Beta2``."""
     ver = normalize_version(APP_VERSION if version is None else version)
     return f"Resume Writer {ver}"
 
@@ -138,18 +183,18 @@ def pyinstaller_name(version: Optional[str] = None) -> str:
 
 
 def compact_version_slug(version: Optional[str] = None) -> str:
-    """Compact slug used in zip filenames, e.g. ``ResumeWriterv3.0.0``."""
+    """Compact slug used in zip filenames, e.g. ``ResumeWriterv3.0.0Beta2``."""
     ver = normalize_version(APP_VERSION if version is None else version)
     return f"ResumeWriter{ver}"
 
 
 def macos_asset_name(version: Optional[str] = None) -> str:
-    """GitHub Release asset for macOS: ``ResumeWritervX.Y.Z.app.zip``."""
+    """GitHub Release asset for macOS: ``ResumeWritervX.Y.ZBetaN.app.zip``."""
     return f"{compact_version_slug(version)}.app.zip"
 
 
 def windows_asset_name(version: Optional[str] = None) -> str:
-    """GitHub Release asset for Windows: ``ResumeWritervX.Y.Z.exe.zip``."""
+    """GitHub Release asset for Windows: ``ResumeWritervX.Y.ZBetaN.exe.zip``."""
     return f"{compact_version_slug(version)}.exe.zip"
 
 
