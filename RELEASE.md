@@ -85,3 +85,7 @@ python release/check_release_tag.py
 # optional full local build:
 # python release/build_release.py
 ```
+
+CI (`ubuntu-latest`) runs the same suite under `xvfb-run` so Tk UI tests have a
+display. Prefer passing the full suite locally (with a real display / macOS) before
+pushing a tagged cut to `genpubv3`.

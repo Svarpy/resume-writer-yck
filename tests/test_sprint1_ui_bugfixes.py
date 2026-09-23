@@ -50,6 +50,15 @@ def _pump(app: ResumeWriterApp, times: int = 20) -> None:
 class Sprint1UiBugfixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        # Headless CI without xvfb cannot create a Tk root; skip the class cleanly.
+        try:
+            import tkinter as tk
+
+            probe = tk.Tk()
+            probe.withdraw()
+            probe.destroy()
+        except Exception as exc:  # noqa: BLE001 — environment gate only
+            raise unittest.SkipTest(f"Tk display unavailable: {exc}") from exc
         clear_session()
         cls.profile = signup("uitester", "UiTest123", display_name="UI Tester", dark_mode=True)
 
