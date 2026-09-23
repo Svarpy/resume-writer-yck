@@ -32,6 +32,12 @@ python3 resume_writer_app.py
 python3 -m resume_writer
 ```
 
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 The UI uses explicitly styled plain Tk widgets instead of `ttk` because macOS's bundled Tk 8.5 can render `ttk` controls incorrectly in dark mode.
 
 The generated document uses the base resume's page geometry: US Letter with 0.75 inch margins and compact paragraph spacing. The default typeface is Arial, matching the base document defaults.

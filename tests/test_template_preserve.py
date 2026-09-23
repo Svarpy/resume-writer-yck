@@ -7,6 +7,14 @@ Uses the PM reference resumes under tests/fixtures/formats/ as ground truth:
 
 from __future__ import annotations
 
+
+# Ensure repo root is importable when tests live under tests/.
+import sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import os
 import tempfile
 import unittest
@@ -25,7 +33,7 @@ from formats_store import (  # noqa: E402
 )
 from user_auth import UserExistsError, signin, signup  # noqa: E402
 
-FIXTURES = Path(__file__).resolve().parent / "tests" / "fixtures" / "formats"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "formats"
 YCK_RESUME = FIXTURES / "YcKResume.docx"
 YCK_FTR2 = FIXTURES / "YcKResumeFTR2.docx"
 

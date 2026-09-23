@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+
+# Ensure repo root is importable when tests live under tests/.
+import sys
+from pathlib import Path as _Path
+
+_ROOT = _Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import os
 import tempfile
 import unittest
@@ -412,7 +421,7 @@ class WriterStructureApplyTests(unittest.TestCase):
 class PrimaryFormatApplyFromReferenceTests(unittest.TestCase):
     """Regression: real PM reference docx → primary → build_resume ≠ default."""
 
-    FIXTURE = Path(__file__).resolve().parent / "tests" / "fixtures" / "formats" / "YcKResume.docx"
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "formats" / "YcKResume.docx"
 
     def setUp(self) -> None:
         if get_current_user() != "refapplyuser":
