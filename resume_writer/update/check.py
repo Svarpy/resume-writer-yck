@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from resume_writer.constants import APP_VERSION
+from resume_writer.update.http_ssl import create_ssl_context
 from resume_writer.version import (
     asset_name_for_platform,
     normalize_version,
@@ -44,8 +44,11 @@ class AvailableUpdate:
 
 
 def _default_urlopen(request: urllib.request.Request, *, timeout: float):
-    context = ssl.create_default_context()
-    return urllib.request.urlopen(request, timeout=timeout, context=context)
+    return urllib.request.urlopen(
+        request,
+        timeout=timeout,
+        context=create_ssl_context(),
+    )
 
 
 def fetch_releases(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -12,6 +11,7 @@ from typing import Any, Callable, Optional
 
 from resume_writer.constants import APP_VERSION
 from resume_writer.paths import get_data_root
+from resume_writer.update.http_ssl import create_ssl_context
 
 DEFAULT_TIMEOUT_SECONDS = 120
 UrlOpen = Callable[..., Any]
@@ -28,8 +28,11 @@ def updates_work_dir() -> Path:
 
 
 def _default_urlopen(request: urllib.request.Request, *, timeout: float):
-    context = ssl.create_default_context()
-    return urllib.request.urlopen(request, timeout=timeout, context=context)
+    return urllib.request.urlopen(
+        request,
+        timeout=timeout,
+        context=create_ssl_context(),
+    )
 
 
 def download_asset(

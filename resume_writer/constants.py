@@ -10,7 +10,7 @@ EMAIL = "yashashchandrakollu1@gmail.com"
 PHONE = "+1 (205) 897 7790"
 PHONE_LINK = "tel:+1%20(205)%20897%207790"
 LOCATION = "Atlanta, GA"
-APP_VERSION = "v3.0.0Beta2"
+APP_VERSION = "v3.0.0Beta3"
 DEFAULT_OUTPUT_DIR = Path("/Users/yck/Desktop/CLGENAPPL")
 
 FONT_CHOICES = (

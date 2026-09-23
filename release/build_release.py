@@ -80,6 +80,8 @@ def run_pyinstaller() -> Path:
         f"--specpath={ROOT / 'build'}",
         "--hidden-import=bcrypt",
         "--hidden-import=docx",
+        "--hidden-import=certifi",
+        "--collect-data=certifi",
     ]
     print(f"Building {name!r} (APP_VERSION={APP_VERSION}) ...", flush=True)
     print("PyInstaller cmd:", cmd, flush=True)
