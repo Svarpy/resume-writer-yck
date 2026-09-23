@@ -81,7 +81,7 @@ def run_pyinstaller() -> Path:
         "--hidden-import=bcrypt",
         "--hidden-import=docx",
     ]
-    print(f"Building {name!r} (APP_VERSION={APP_VERSION}) …", flush=True)
+    print(f"Building {name!r} (APP_VERSION={APP_VERSION}) ...", flush=True)
     print("PyInstaller cmd:", cmd, flush=True)
     completed = subprocess.run(cmd, cwd=str(ROOT), check=False)
     if completed.returncode != 0:
@@ -137,7 +137,7 @@ def zip_artifact(artifact: Path | None = None) -> Path:
     if not source.exists():
         raise SystemExit(f"Nothing to zip; missing {source}")
 
-    print(f"Zipping {source} → {dest}", flush=True)
+    print(f"Zipping {source} -> {dest}", flush=True)
     _zip_tree(source, dest)
     return dest
 
