@@ -34,14 +34,19 @@ RELEASE_OUT = ROOT / "release" / "out"
 
 
 def _add_data_arg() -> str:
+    """Return PyInstaller --add-data value (relative paths; OS pathsep)."""
     sep = ";" if os.name == "nt" else ":"
-    return f"{DOC_SRC}{sep}resume_writer/docs"
+    # Prefer repo-relative paths — absolute Windows paths have bitten CI before.
+    rel = Path("resume_writer") / "docs" / "documentation.md"
+    return f"{rel.as_posix()}{sep}resume_writer/docs"
 
 
 def run_pyinstaller() -> Path:
     """Run PyInstaller onedir/windowed build; return the primary artifact path."""
+    import subprocess
+
     try:
-        import PyInstaller.__main__ as pyimain
+        import PyInstaller  # noqa: F401
     except ImportError as exc:  # pragma: no cover - CI installs deps
         raise SystemExit(
             "PyInstaller is required. Install with: pip install -r requirements.txt"
@@ -55,7 +60,13 @@ def run_pyinstaller() -> Path:
 
         name = compact_version_slug()
 
-    args = [
+    if not DOC_SRC.is_file():
+        raise SystemExit(f"Missing documentation data file: {DOC_SRC}")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
         str(ROOT / "resume_writer_app.py"),
         "--noconfirm",
         "--clean",
@@ -66,22 +77,16 @@ def run_pyinstaller() -> Path:
         f"--distpath={DIST}",
         f"--workpath={ROOT / 'build'}",
         f"--specpath={ROOT / 'build'}",
-        # bcrypt ships native libs that PyInstaller often misses on Windows.
         "--hidden-import=bcrypt",
         "--hidden-import=_cffi_backend",
         "--collect-all=bcrypt",
         "--hidden-import=docx",
-        "--hidden-import=lxml",
     ]
     print(f"Building {name!r} (APP_VERSION={APP_VERSION}) …", flush=True)
-    print("PyInstaller args:", args, flush=True)
-    try:
-        pyimain.run(args)
-    except SystemExit as exc:
-        # PyInstaller calls sys.exit(0) on success; re-raise non-zero.
-        code = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
-        if code not in (0, None):
-            raise SystemExit(f"PyInstaller failed with exit code {code}") from exc
+    print("PyInstaller cmd:", cmd, flush=True)
+    completed = subprocess.run(cmd, cwd=str(ROOT), check=False)
+    if completed.returncode != 0:
+        raise SystemExit(f"PyInstaller failed with exit code {completed.returncode}")
 
     system = platform.system().lower()
     if system == "darwin":

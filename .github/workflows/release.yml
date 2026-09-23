@@ -114,7 +114,17 @@ jobs:
       - name: Build and zip
         env:
           RESUME_WRITER_SIGN: "0"
-        run: python release/build_release.py
+        run: python -u release/build_release.py
+
+      - name: Upload Windows build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-failure
+          path: |
+            build/**
+            dist/**
+          if-no-files-found: warn
 
       - name: Upload Windows asset
         uses: actions/upload-artifact@v4
