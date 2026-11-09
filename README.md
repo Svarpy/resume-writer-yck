@@ -28,7 +28,22 @@ A small Python desktop application that collects resume content and writes a `.d
 ```bash
 python3 -m pip install -r requirements.txt
 python3 resume_writer_app.py
+# or
+python3 -m resume_writer
 ```
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Releases
+
+GitHub Actions on **`main`** runs tests always; when `HEAD` has a git tag equal to
+`APP_VERSION` (`vX.Y.Z`), it also builds macOS/Windows PyInstaller zips and
+publishes a GitHub Release. See [RELEASE.md](RELEASE.md) for the cut checklist
+(`bump APP_VERSION` + tag `vX.Y.Z` when merging to `main`).
 
 The UI uses explicitly styled plain Tk widgets instead of `ttk` because macOS's bundled Tk 8.5 can render `ttk` controls incorrectly in dark mode.
 
