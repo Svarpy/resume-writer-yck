@@ -432,5 +432,73 @@ class UnknownFormatTests(unittest.TestCase):
         self.assertEqual(_fingerprint(by_text["Tools: git, docker"]), _fingerprint(sample["Languages: Python, Go"]))
 
 
+def _two_row_table_sample(path: Path) -> None:
+    """Company + first role share ONE two-row table; later roles are single-row tables (dates in column 2)."""
+    document = Document()
+
+    def heading(text: str, size: int) -> None:
+        run = document.add_paragraph().add_run(text)
+        run.bold, run.font.size = True, Pt(size)
+
+    heading("Your Name", 14)
+    document.add_paragraph("your.name@example.com  |  +1 555 010 0100  |  City, State")
+    heading("WORK EXPERIENCE", 12)
+
+    def table(rows):
+        t = document.add_table(rows=len(rows), cols=2)
+        for row, (left, right) in zip(t.rows, rows):
+            row.cells[0].text, row.cells[1].text = left, right
+
+    table([("Company Name | Location", "January 2020 – Present"), ("Software Engineer", "September 2023 – July 2024")])
+    document.add_paragraph("Sample bullet point describing an achievement.")
+    table([("Software Developer", "July 2022 – September 2023")])
+    document.add_paragraph("Another sample bullet point about your work.")
+    heading("EDUCATION", 12)
+    table([("Degree Name", "January 2016 – May 2020")])
+    document.add_paragraph("Institution Name, City, State")
+    document.save(str(path))
+
+
+class TwoRowTableExperienceTests(unittest.TestCase):
+    def test_company_and_role_rows_are_filled_from_their_own_lines(self):
+        path = Path(_TEST_ROOT) / "two_row.docx"
+        _two_row_table_sample(path)
+        experience = "\n".join([
+            "Acme Corp | Austin, TX    June 2026 – Present",
+            "Site Reliability Engineer",  # role written without dates
+            "Triaged escalated incidents and coordinated cross-team fixes within SLA windows.",
+            "",
+            "Globex | Remote    July 2022 – July 2024",
+            "Platform Engineer – Analyst    September 2023 – July 2024",
+            "Earned two awards across multiple quarters in 2023–2024, recognised for incident resolution.",
+            "Platform Engineer – I    July 2022 – September 2023",
+            "Built Java APIs for customer service operations.",
+        ])
+        education = "Master of Science    August 2024 – May 2026\nSome University, AL"
+        content = ResumeContent(
+            name="Jane Doe", email="jane@example.org", phone="+1 555 010 2030", location="Austin, TX",
+            sections={"experience": experience},
+            section_plan=(SectionSpec("experience", "Work Experience", "experience", "WORK EXPERIENCE", True),
+                          SectionSpec("education", "Education", "education", "EDUCATION", True)),
+            education_entries=(education, education),  # an accidental duplicate entry prints once
+        )
+        result = _generate(path, content)
+        text = "\n".join(paragraph_text(p) for p in iter_paragraphs(result.element.body))
+        for leaked in ("Software Engineer", "Software Developer", "Company Name", "Degree Name", "Institution Name"):
+            self.assertNotIn(leaked, text)  # sample text never leaks
+        pairs = [(c[0].strip(), c[1].strip()) for c in ([cell.text for cell in row.cells] for t in result.tables for row in t.rows)]
+        self.assertEqual(pairs, [
+            ("Acme Corp | Austin, TX", "June 2026 – Present"),
+            ("Site Reliability Engineer", ""),
+            ("Globex | Remote", "July 2022 – July 2024"),
+            ("Platform Engineer – Analyst", "September 2023 – July 2024"),
+            ("Platform Engineer – I", "July 2022 – September 2023"),
+            ("Master of Science", "August 2024 – May 2026"),
+        ])
+        # A bullet that merely mentions a year range stays a bullet.
+        self.assertIn("Earned two awards across multiple quarters in 2023–2024, recognised for incident resolution.",
+                      [paragraph_text(p) for p in iter_paragraphs(result.element.body)])
+
+
 if __name__ == "__main__":
     unittest.main()

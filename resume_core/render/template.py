@@ -21,6 +21,7 @@ from docx.oxml.ns import qn
 from resume_core.ooxml.analysis import (
     BULLET_RE,
     LABEL_RE,
+    Block,
     ContactItem,
     DocumentAnalysis,
     Line,
@@ -219,7 +220,7 @@ class _Generator:
         if content.section_plan:
             for spec in content.section_plan:
                 if spec.kind == "education":
-                    text = "\n\n".join(e for e in content.education_entries if e.strip())
+                    text = "\n\n".join(_unique_entries(content.education_entries))
                 else:
                     text = content.text_for(spec.key)
                 if not text.strip():
@@ -230,7 +231,7 @@ class _Generator:
         # Legacy content (no plan): sections in the sample's own order.
         for region in self.a.regions:
             if region.kind == "education":
-                text = "\n\n".join(e for e in content.education_entries if e.strip())
+                text = "\n\n".join(_unique_entries(content.education_entries))
             else:
                 text = content.text_for(region.key)
             if text.strip():
@@ -696,14 +697,60 @@ class _Generator:
                 replace_span(paragraph, offsets[index - 1][1], seg_end, "")
 
     # -- experience / education ---------------------------------------------------------
+    def _job_exemplars(self, region: Optional[Region]) -> tuple[Optional[Line], Optional[Line]]:
+        """Exemplars for a company row and a role row of the experience section.
+
+        A sample often keeps the company row and its first role row in ONE table (and later roles in
+        single-row tables). Such a table is split by row so that each row is filled from its own line.
+        """
+        company = self._ex(region, "company", "unit")
+        if company is None:
+            return None, None
+        rows = self._dated_rows(company)
+        if len(rows) > 1:
+            company = rows[0]
+        role = region.exemplars.get("role") if region is not None else None
+        if role is not None and len(self._dated_rows(role)) > 1:
+            role = self._dated_rows(role)[-1]
+        if role is None and len(rows) > 1:
+            role = rows[-1]
+        if role is None and region is not None:
+            first = region.exemplars.get("company") or region.exemplars.get("unit")
+            for line in region.lines:  # a later single-line unit worded like a job title
+                if line.role == "unit" and line is not first and looks_like_role_line(re.sub(
+                        r"\s+", " ", (find_date(line.text) and line.text[: find_date(line.text)[0]]) or line.text)):
+                    row_lines = self._dated_rows(line)
+                    role = row_lines[-1] if len(row_lines) > 1 else line
+                    break
+        return company, role or company
+
+    @staticmethod
+    def _dated_rows(line: Line) -> list[Line]:
+        """One Line per row when ``line`` is a table whose every row holds a date, else ``[line]``."""
+        block = line.blocks[0]
+        if len(line.blocks) != 1 or block.element.tag != qn("w:tbl"):
+            return [line]
+        rows = block.element.findall(qn("w:tr"))
+        if len(rows) < 2 or not all(find_date(" ".join(paragraph_text(p) for p in row.iter(P))) for row in rows):
+            return [line]
+        out: list[Line] = []
+        for keep in range(len(rows)):
+            table = deepcopy(block.element)
+            for position, row in enumerate(table.findall(qn("w:tr"))):
+                if position != keep:
+                    table.remove(row)
+            paragraphs = list(table.iter(P))
+            out.append(Line("unit", [Block(element=table, paragraphs=paragraphs, container=block.container,
+                                           text="\n".join(paragraph_text(p) for p in paragraphs), kind="dated")]))
+        return out
+
     def _experience(self, raw: list[str], region: Optional[Region]) -> list:
         companies = self.content.known_companies
         out: list = []
         current_company: Optional[int] = None
         role_index: dict[Optional[int], int] = {}
         previous_was_bullet = False
-        company_ex = self._ex(region, "company", "unit")
-        role_ex = self._ex(region, "role", "company", "unit")
+        company_ex, role_ex = self._job_exemplars(region)
         gap_ex = region.exemplars.get("gap") if region is not None else None
         emitted_unit = False
 
@@ -748,6 +795,9 @@ class _Generator:
                     role_index[current_company] = index + 1
                     emit_unit(clean, role_date, True)
                     continue
+                if clean == stripped and emitted_unit and not previous_was_bullet:
+                    emit_unit(clean, "", True)  # a role written without dates, right under its company
+                    continue
             out.append(self._bullet(self._ex(region, "bullet", "plain"), clean))
             previous_was_bullet = True
         return [el for el in out if el is not None]
@@ -778,7 +828,9 @@ class _Generator:
 def _split_dated(line: str) -> Optional[tuple[str, str]]:
     """``(left text, date)`` of a line such as ``Acme | Remote   Jan 2020 - Present``, or None.
 
-    The left text is kept exactly as typed (inner ``|`` separators included).
+    The left text is kept exactly as typed (inner ``|`` separators included). The date has to close
+    the line (an annotation such as ``| GPA 4.0`` may follow), so a sentence that merely mentions a
+    range ("... across 2023-2024, recognised for ...") is never mistaken for a dated heading.
     """
     text = line.strip()
     if "\t" in text:
@@ -786,9 +838,16 @@ def _split_dated(line: str) -> Optional[tuple[str, str]]:
         span = find_date(right)
         if span and left.strip():
             return left.strip().rstrip(" |,-–—"), right[span[0]:span[1]]
-    match = DATE_RANGE.search(text)
-    if match and text[: match.start()].strip():
-        return text[: match.start()].strip().rstrip(" |,-–—"), match.group()
+    for match in reversed(list(DATE_RANGE.finditer(text))):
+        left = text[: match.start()].strip()
+        rest = text[match.end():].strip()
+        if not left:
+            continue
+        if rest and not (rest[0] in "|(" and len(rest.split()) <= 6):
+            continue
+        if len(left.split()) > 16 or left.endswith("."):
+            continue
+        return left.rstrip(" |,-–—"), match.group()
     return None
 
 
@@ -809,6 +868,18 @@ def _insert_in_schema_order(rpr, element) -> None:
             child.addprevious(element)
             return
     rpr.append(element)
+
+
+def _unique_entries(entries) -> list[str]:
+    """Non-empty entries, without exact repeats (the same education saved twice prints once)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in entries:
+        key = re.sub(r"\s+", " ", entry).strip().casefold()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(entry)
+    return out
 
 
 def _marker_length(text: str) -> int:
