@@ -1,0 +1,26 @@
+"""In-app auto-updater: check GitHub Releases, download, apply, relaunch."""
+
+from __future__ import annotations
+
+from resume_gui.update.check import AvailableUpdate, check_for_available_update
+from resume_gui.update.service import (
+    manual_update_check,
+    run_install_now,
+    schedule_launch_update_check,
+)
+from resume_gui.update.state import (
+    CHECK_INTERVAL_DAYS,
+    is_check_due,
+    record_check_now,
+)
+
+__all__ = [
+    "AvailableUpdate",
+    "CHECK_INTERVAL_DAYS",
+    "check_for_available_update",
+    "is_check_due",
+    "manual_update_check",
+    "record_check_now",
+    "run_install_now",
+    "schedule_launch_update_check",
+]

@@ -1,6 +1,6 @@
 # Release checklist (Sprint 2)
 
-Single source of truth: ``APP_VERSION`` in ``resume_writer/constants.py``
+Single source of truth: ``APP_VERSION`` in ``resume_core/constants.py``
 (e.g. ``v3.0.0`` or ``v3.0.0Beta2``). The git tag and GitHub Release **must**
 use the same string (``vX.Y.Z`` or ``vX.Y.ZBetaN``).
 
@@ -64,7 +64,7 @@ Display name inside the binary/bundle: `Resume Writer vX.Y.ZBetaN`.
 | HEAD has **no** matching tag | Tests only (no publish) |
 
 Workflow file: `.github/workflows/release.yml`  
-Helpers: `resume_writer/version.py`, `release/build_release.py`,
+Helpers: `resume_core/version.py`, `release/build_release.py`,
 `release/check_release_tag.py`
 
 ## Signing (Sprint 2 decision)

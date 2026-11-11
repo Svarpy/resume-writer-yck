@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
       # Tk UI tests (test_sprint1_ui_bugfixes) need a display; ubuntu-latest is headless.
       - name: Install xvfb for Tk UI tests

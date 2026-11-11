@@ -7,3 +7,8 @@ build/
 dist/
 .worktrees/
 release/out/
+
+# secrets and local data
+.env
+.env.*
+!.env.example
