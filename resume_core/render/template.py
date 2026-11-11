@@ -220,7 +220,7 @@ class _Generator:
         if content.section_plan:
             for spec in content.section_plan:
                 if spec.kind == "education":
-                    text = "\n\n".join(_unique_entries(content.education_entries))
+                    text = "\n\n".join(e for e in content.education_entries if e.strip())
                 else:
                     text = content.text_for(spec.key)
                 if not text.strip():
@@ -231,7 +231,7 @@ class _Generator:
         # Legacy content (no plan): sections in the sample's own order.
         for region in self.a.regions:
             if region.kind == "education":
-                text = "\n\n".join(_unique_entries(content.education_entries))
+                text = "\n\n".join(e for e in content.education_entries if e.strip())
             else:
                 text = content.text_for(region.key)
             if text.strip():
@@ -868,18 +868,6 @@ def _insert_in_schema_order(rpr, element) -> None:
             child.addprevious(element)
             return
     rpr.append(element)
-
-
-def _unique_entries(entries) -> list[str]:
-    """Non-empty entries, without exact repeats (the same education saved twice prints once)."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for entry in entries:
-        key = re.sub(r"\s+", " ", entry).strip().casefold()
-        if key and key not in seen:
-            seen.add(key)
-            out.append(entry)
-    return out
 
 
 def _marker_length(text: str) -> int:

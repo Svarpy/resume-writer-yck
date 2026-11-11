@@ -92,7 +92,8 @@ _EDUCATION_FIELDS = (
     FieldDef("enabled", "Include in resume", "bool", True),
     FieldDef(
         "text",
-        "Entry (one line per row; separate the date with a Tab or put it after a '|')",
+        "Degrees (put the date after a Tab or a '|'; the institution goes on the next line; "
+        "leave a blank line between degrees to list several under this label)",
         "text",
         "",
     ),
@@ -192,7 +193,8 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
     # --- Education --------------------------------------------------------
     SettingDef(
         "education.entries", "Education", "Education Entries", "records", [],
-        "Each included entry is written to the Education section. Add, remove, reorder or switch entries off here.",
+        "Each included entry is written to the Education section, and one entry (label) can hold several degrees. "
+        "Add, remove, reorder or switch entries off here.",
         fields=_EDUCATION_FIELDS,
     ),
     # --- Experience Parsing ----------------------------------------------

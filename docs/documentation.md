@@ -198,7 +198,7 @@ The page works like the VS Code settings editor:
 | --- | --- |
 | Appearance | Dark mode, accent colour, Writer text size; advanced: sidebar startup mode and auto-collapse width |
 | Duplicate Check | Enable/disable, folders to check (`{output_dir}` expands to the Output Directory), file types, case sensitivity |
-| Education | List of education entries (label, include in resume, text); add, remove, reorder |
+| Education | List of education entries (label, include in resume, degrees); one entry can hold several degrees, separated by a blank line (date after a Tab or `\|`, institution on the next line); add, remove, reorder |
 | Experience Parsing | Known companies: name, line prefixes to match, company date and per-role dates used when a pasted line has no date |
 | Fonts | Font choices, name/heading/text size choices (add your own fonts and sizes) |
 | Metadata | DOCX author (blank = personal name), subject, title template (`{name}`), keyword count |

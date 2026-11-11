@@ -474,13 +474,16 @@ class TwoRowTableExperienceTests(unittest.TestCase):
             "Platform Engineer – I    July 2022 – September 2023",
             "Built Java APIs for customer service operations.",
         ])
-        education = "Master of Science    August 2024 – May 2026\nSome University, AL"
+        # One education entry holding two degrees (the second after a blank line), plus a second entry.
+        education = ("Master of Science    August 2024 – May 2026\nSome University, AL\n\n"
+                     "Bachelor of Science    August 2020 – May 2024\nOther College, TX")
+        extra = "Diploma    2019 – 2020\nTech Institute"
         content = ResumeContent(
             name="Jane Doe", email="jane@example.org", phone="+1 555 010 2030", location="Austin, TX",
             sections={"experience": experience},
             section_plan=(SectionSpec("experience", "Work Experience", "experience", "WORK EXPERIENCE", True),
                           SectionSpec("education", "Education", "education", "EDUCATION", True)),
-            education_entries=(education, education),  # an accidental duplicate entry prints once
+            education_entries=(education, extra),
         )
         result = _generate(path, content)
         text = "\n".join(paragraph_text(p) for p in iter_paragraphs(result.element.body))
@@ -494,7 +497,11 @@ class TwoRowTableExperienceTests(unittest.TestCase):
             ("Platform Engineer – Analyst", "September 2023 – July 2024"),
             ("Platform Engineer – I", "July 2022 – September 2023"),
             ("Master of Science", "August 2024 – May 2026"),
+            ("Bachelor of Science", "August 2020 – May 2024"),
+            ("Diploma", "2019 – 2020"),
         ])
+        for institution in ("Some University, AL", "Other College, TX", "Tech Institute"):
+            self.assertIn(institution, text)
         # A bullet that merely mentions a year range stays a bullet.
         self.assertIn("Earned two awards across multiple quarters in 2023–2024, recognised for incident resolution.",
                       [paragraph_text(p) for p in iter_paragraphs(result.element.body)])
