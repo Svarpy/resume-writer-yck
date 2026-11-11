@@ -12,18 +12,15 @@ if str(_ROOT) not in sys.path:
 
 from resume_core.constants import APP_VERSION
 from resume_core.version import (
-    asset_name_for_platform,
     asset_names_for,
     compact_version_slug,
     compare_versions,
     display_app_name,
     display_name,
-    is_newer,
     macos_asset_name,
     normalize_version,
     parse_version,
     pyinstaller_name,
-    version_is_newer,
     windows_asset_name,
 )
 
@@ -69,17 +66,6 @@ class VersionHelpersTests(unittest.TestCase):
         self.assertEqual(compare_versions("v3.0.0", "v3.0.0Beta2"), 1)
         # Numeric Beta compare (not string): Beta2 < Beta10
         self.assertEqual(compare_versions("v3.0.0Beta2", "v3.0.0Beta10"), -1)
-        self.assertTrue(is_newer("v3.0.0", "v3.0.0Beta2"))
-        self.assertTrue(is_newer("v3.0.0Beta2", "v3.0.0Beta1"))
-        self.assertFalse(is_newer("v3.0.0Beta2", "v3.0.0"))
-
-    def test_is_newer(self) -> None:
-        self.assertTrue(is_newer("v3.0.1", "v3.0.0"))
-        self.assertFalse(is_newer("v3.0.0", "v3.0.0"))
-        self.assertFalse(is_newer("v2.9.0", "v3.0.0"))
-        self.assertTrue(version_is_newer("v3.1.0", "v3.0.0"))
-        self.assertTrue(is_newer("v99.0.0"))
-        self.assertFalse(is_newer("v1.0.0"))
 
     def test_display_and_pyinstaller_names(self) -> None:
         self.assertEqual(display_name("v3.0.0"), "Resume Writer v3.0.0")
@@ -109,18 +95,6 @@ class VersionHelpersTests(unittest.TestCase):
         )
         self.assertEqual(macos_asset_name(), f"ResumeWriter{APP_VERSION}.app.zip")
         self.assertEqual(windows_asset_name(), f"ResumeWriter{APP_VERSION}.exe.zip")
-        self.assertEqual(
-            asset_name_for_platform("v3.0.0", "darwin"),
-            "ResumeWriterv3.0.0.app.zip",
-        )
-        self.assertEqual(
-            asset_name_for_platform("v3.0.0", "win32"),
-            "ResumeWriterv3.0.0.exe.zip",
-        )
-        self.assertEqual(
-            asset_name_for_platform("v3.0.0Beta2", "darwin"),
-            "ResumeWriterv3.0.0Beta2.app.zip",
-        )
 
 
 if __name__ == "__main__":

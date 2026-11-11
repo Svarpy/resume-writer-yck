@@ -23,7 +23,6 @@ This file is not shown inside the app. The in-app Documentation page was removed
 - [Job Experience Input Tips](#job-experience-input-tips)
 - [Mac Installation](#mac-installation)
 - [Windows Installation](#windows-installation)
-- [Auto-Update (In-App)](#auto-update-in-app)
 - [Releases And Main-Merge Checklist](#releases-and-main-merge-checklist)
 - [Updating Dependencies](#updating-dependencies)
 - [Security Notes](#security-notes)
@@ -37,7 +36,7 @@ Five packages in one repository. They can be installed together or separately (s
 resume_core/     # the engine: OOXML parser + generator, settings schema/validation, format analysis. No I/O, no UI.
 resume_server/   # FastAPI + MongoDB: accounts, tokens, formats, settings. The ONLY place with database credentials.
 resume_client/   # API client + local disk cache + generation engine (shared by the desktop app and the MCP server).
-resume_gui/      # Tk desktop app (talks to the client only) and the in-app updater.
+resume_gui/      # Tk desktop app (talks to the client only).
 resume_mcp/      # MCP server for AI apps (talks to the client only).
 docs/            # documentation (not shipped inside the app)
 tests/           # core / server / client / mcp / gui test suites
@@ -206,7 +205,6 @@ The page works like the VS Code settings editor:
 | Output | Output directory, file name template, file name placeholder, date format, live "Resulting Path" preview |
 | Personal Details | Name, email, phone, location shown in the resume header |
 | Resume Sections | The section list: key, Writer label, DOCX heading, kind, width, shown, min/max words; add, remove, reorder |
-| Updates | Check for updates on launch, Check Now |
 | Validation | Which fields are required before Generate is enabled (every Writer section plus File Name) |
 | Writer | Clear fields after generate |
 
@@ -362,36 +360,6 @@ python3 release/build_release.py
 
 Run the server separately (your own machine, a VPS or a container) and point the app at it with `RW_API_URL`. On first launch macOS may block a locally built app: right-click it in Finder and choose Open. On Windows choose More info > Run anyway for unsigned builds.
 
-## Auto-Update (In-App)
-
-Sprint 2 ships a weekly in-app updater that checks **public** GitHub Releases for the `Svarpy/resume-writer-yck` repository (no auth token).
-
-### When the check runs
-
-- After the main shell is ready, the app schedules a background check (`resume_gui/update/`).
-- Checks run at most once every **7 days** (state file `update_state.json` under the app data root).
-- Network / API failures fail soft: the previous install is kept, and the last-check timestamp is **not** advanced (retry on a later launch).
-
-### Install Now / Remind Later
-
-When a newer release has an OS-matching asset, the app shows an **Update Available** dialog:
-
-- **Install Now** — download → verify zip → replace the current install → cleanup → relaunch. On failure, the previous install is kept and an error is shown.
-- **Remind Later** — dismisses the dialog and records the check so the prompt will not reappear until the next weekly interval.
-
-Closing the dialog is treated like **Remind Later**.
-
-Draft and prerelease GitHub Releases are ignored. Only releases newer than the running `APP_VERSION` with the correct platform asset are offered.
-
-### Release asset names the updater expects
-
-| Platform | GitHub Release asset |
-| --- | --- |
-| macOS | `ResumeWritervX.Y.Z.app.zip` |
-| Windows | `ResumeWritervX.Y.Z.exe.zip` |
-
-Display name inside the binary/bundle: `Resume Writer vX.Y.Z`.
-
 ## Releases And Main-Merge Checklist
 
 Canonical operator checklist: repo root **`RELEASE.md`** (keep that file in sync with this section).
@@ -502,13 +470,7 @@ Role Name | January 2025 - May 2026
 
 Pasted dates should be preserved. Fallback dates are only used for lines that match a Known Company in Settings and do not include a date.
 
-### Update Check Never Appears
-
-- The weekly interval may not have elapsed yet (`update_state.json` under the app data directory).
-- There may be no newer public release, or the release may lack the OS-specific asset name.
-- Network errors fail soft; try again on a later launch.
-
-### macOS Blocks The Downloaded App / Update
+### macOS Blocks The Downloaded App
 
 Right-click the app in Finder and choose **Open** (Gatekeeper). Sprint 2 builds are unsigned.
 

@@ -65,11 +65,6 @@ class GuiCase(unittest.TestCase):
             pass
 
     def setUp(self) -> None:
-        from unittest import mock
-
-        patcher = mock.patch("resume_gui.update.schedule_launch_update_check")  # never touch the network
-        patcher.start()
-        self.addCleanup(patcher.stop)
         self.world = World()
         self.client = self.world.client()
         self.client.signup(self.username, self.password, display_name="Gui Tester", email="gui@example.com")
@@ -77,7 +72,6 @@ class GuiCase(unittest.TestCase):
             self.client.add_format("Reference", YCK_RESUME)
         self.out_dir = Path(tempfile.mkdtemp(prefix="rw-gui-out-"))
         self.app = self.make_app(self.client)
-        self.app.settings.set("updates.auto_check", False)
         self.app.settings.set("output.directory", str(self.out_dir))
         if self.with_format:
             rows = self.app.settings.get("sections.items")  # a Summary word limit, like the app used to ship

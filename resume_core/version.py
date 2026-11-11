@@ -7,13 +7,12 @@ Canonical forms:
 - Release: ``vX.Y.Z`` (e.g. ``v3.0.0``)
 - Beta: ``vX.Y.ZBetaN`` (e.g. ``v3.0.0Beta2``)
 
-Shared by the release pipeline and the in-app updater.
+Used by the release pipeline (tag gate and asset names).
 """
 
 from __future__ import annotations
 
 import re
-import sys
 from typing import Optional, Tuple
 
 from resume_core.constants import APP_VERSION
@@ -24,8 +23,6 @@ __all__ = [
     "normalize_version",
     "parse_version",
     "compare_versions",
-    "is_newer",
-    "version_is_newer",
     "display_name",
     "display_app_name",
     "pyinstaller_name",
@@ -33,7 +30,6 @@ __all__ = [
     "macos_asset_name",
     "windows_asset_name",
     "asset_names_for",
-    "asset_name_for_platform",
 ]
 
 # Canonical tags: vX.Y.Z or vX.Y.ZBetaN (e.g. v3.0.0, v3.0.0Beta2).
@@ -155,17 +151,6 @@ def compare_versions(left: str, right: str) -> int:
     return 0
 
 
-def is_newer(candidate: str, current: Optional[str] = None) -> bool:
-    """True when ``candidate`` is strictly newer than ``current`` (default: APP_VERSION)."""
-    baseline = APP_VERSION if current is None else current
-    return compare_versions(candidate, baseline) > 0
-
-
-def version_is_newer(candidate: str, current: str) -> bool:
-    """Alias for updater code that always passes both sides explicitly."""
-    return compare_versions(candidate, current) > 0
-
-
 def display_name(version: Optional[str] = None) -> str:
     """Human-facing app name, e.g. ``Resume Writer v3.0.0Beta2``."""
     ver = normalize_version(APP_VERSION if version is None else version)
@@ -204,21 +189,3 @@ def asset_names_for(version: Optional[str] = None) -> dict[str, str]:
         "macos": macos_asset_name(version),
         "windows": windows_asset_name(version),
     }
-
-
-def asset_name_for_platform(
-    version: Optional[str] = None,
-    platform: Optional[str] = None,
-) -> str:
-    """Return the Release asset filename for the given platform.
-
-    ``platform`` accepts ``sys.platform`` values (``darwin``, ``win32``, …)
-    or short names ``macos`` / ``windows``.
-    """
-    plat = (platform or sys.platform).lower()
-    ver = APP_VERSION if version is None else version
-    if plat in ("darwin", "macos", "mac"):
-        return macos_asset_name(ver)
-    if plat.startswith("win") or plat == "windows":
-        return windows_asset_name(ver)
-    raise ValueError(f"Unsupported platform for release assets: {plat!r}")

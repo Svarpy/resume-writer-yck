@@ -57,7 +57,7 @@ class SettingDef:
     key: str
     category: str
     label: str
-    kind: str  # bool | str | int | choice | path | color | str_list | int_list | records | checklist | info | action
+    kind: str  # bool | str | int | choice | path | color | str_list | int_list | records | checklist | info
     default: Any = None
     description: str = ""
     choices: tuple[str, ...] = ()
@@ -66,7 +66,7 @@ class SettingDef:
     fields: tuple[FieldDef, ...] = ()
     # Name of a validator in ``store`` run after type validation (cross-field rules).
     check: str = ""
-    # info/action rows are shown on the Settings page but never written to JSON.
+    # info rows are shown on the Settings page but never written to settings.
     stored: bool = True
     # Hidden on the Settings page until "Show Advanced" is switched on (still searchable).
     advanced: bool = False
@@ -286,16 +286,6 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         fields=_SECTION_FIELDS,
         check="sections",
         scope="format",
-    ),
-    # --- Updates ----------------------------------------------------------
-    SettingDef(
-        "updates.auto_check", "Updates", "Check For Updates On Launch", "bool", True,
-        "Check GitHub Releases for a newer version about once a week after sign-in.",
-    ),
-    SettingDef(
-        "updates.check_now", "Updates", "Check Now", "action", None,
-        "Check GitHub Releases immediately, ignoring the weekly timer.",
-        stored=False,
     ),
     # --- Validation -------------------------------------------------------
     SettingDef(

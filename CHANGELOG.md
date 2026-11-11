@@ -8,6 +8,7 @@
 
 ### v4 (v4generic)
 
+- Removed the in-app updater completely (the weekly GitHub Releases check, the Install Now / Remind Later dialog, the Updates settings, `resume_gui/update/` and its tests). Releases are still built by CI; the app no longer checks for or installs them.
 - **Architecture rewrite.** The application is split into `resume_core` (engine), `resume_server` (FastAPI + MongoDB), `resume_client` (API client, local cache, local generation), `resume_gui` (Tk app) and `resume_mcp` (MCP server). The old `resume_writer` package, the root compatibility shims and every local JSON/XML data file are gone.
 - **MongoDB** now stores accounts, access tokens, format metadata, the uploaded sample documents and settings. Secrets live in `.env` (see `.env.example`); only the server needs them. Existing local data is not migrated: sign up again and re-upload formats.
 - The database is `resume-writer`; its `system` collection records every app version with the newest marked `latest` (`current_version`, `latest_version`, `versions`), updated when the server starts and readable at `GET /api/v1/system`.
@@ -41,9 +42,7 @@
 - Breaking: default output folder is now `~/Documents/Resumes` and the default file name is `Resume{company}{date}`; set Output settings to restore a previous folder or prefix.
 
 - Pre–Sprint 2 package layout refactor (structure/hygiene only): application code under `resume_writer/` with layer rule `ui` → `render` → `formats` → `auth` → `paths`; thin `resume_writer_app.py` / `python -m resume_writer` entrypoints and root compat shims; unittest suite under `tests/` via `python -m unittest discover -s tests`.
-- In-app auto-updater (Sprint 2): weekly check against public GitHub Releases (`Svarpy/resume-writer-yck`); Install Now / Remind Later dialog; download → verify → replace install → relaunch; fail soft on network errors. Module: `resume_writer/update/`.
 - Release pipeline (Sprint 2): `APP_VERSION` + tag `vX.Y.Z` on `main` publishes `ResumeWritervX.Y.Z.app.zip` / `.exe.zip`; unsigned builds (Gatekeeper / SmartScreen note). Operator checklist: `RELEASE.md`.
-- Docs: auto-update UX + main-merge / release checklist documented in Notion Documentation (and local `documentation.md` / `CHANGELOG.md` while still retained).
 
 ## v3.0.0
 

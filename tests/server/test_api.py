@@ -369,6 +369,18 @@ class SettingsApiTests(unittest.TestCase):
         self.assertEqual(self.get()["values"]["personal.location"], "")  # all-or-nothing
         self.assertEqual(self.patch({"nope.key": 1}).status_code, 422)
 
+    def test_overrides_saved_for_removed_settings_are_ignored_and_dropped(self) -> None:
+        """Accounts that still hold the old `updates.*` settings keep working; the keys disappear on the next save."""
+        db = mongomock.MongoClient()["stale"]
+        client = TestClient(create_app(CONFIG, db))
+        token = signup(client)["token"]
+        db.settings.update_one({"_id": "alice"}, {"$set": {"overrides": {"updates.auto_check": False, "personal.phone": "1"}}}, upsert=True)
+        view = client.get("/api/v1/settings", headers=auth(token)).json()
+        self.assertNotIn("updates.auto_check", view["values"])
+        self.assertEqual(view["values"]["personal.phone"], "1")
+        client.patch("/api/v1/settings", headers=auth(token), json={"changes": {"personal.location": "Rome"}})
+        self.assertEqual(set(db.settings.find_one({"_id": "alice"})["overrides"]), {"personal.phone", "personal.location"})
+
     def test_revisions_and_reset(self) -> None:
         before = self.get()["user_rev"]
         self.patch({"personal.phone": "1"})

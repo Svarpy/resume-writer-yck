@@ -75,8 +75,6 @@ def run_pyinstaller() -> Path:
         "--exclude-module=uvicorn",
         "--exclude-module=resume_mcp",
         "--hidden-import=docx",
-        "--hidden-import=certifi",
-        "--collect-data=certifi",
     ]
     print(f"Building {name!r} (APP_VERSION={APP_VERSION}) ...", flush=True)
     print("PyInstaller cmd:", cmd, flush=True)

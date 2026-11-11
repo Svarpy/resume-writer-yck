@@ -22,7 +22,6 @@ A small Python desktop application that collects resume content and writes a `.d
 - Email and phone hyperlinks and horizontal separator rules in the generated Word file.
 - DOCX metadata (author, subject, title, keywords) comes from Settings > Metadata.
 - Formatter: there is no built-in format. Upload a sample Word document on first use (it becomes the default; change the default any time); an OOXML parser reads its sections and line styles and every resume generated with that format is the sample's own layout filled with your content. Sections, fonts and required fields are settings per format.
-- In-app weekly update check against GitHub Releases (can be switched off in Settings).
 
 ## Architecture
 

@@ -249,7 +249,6 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self.settings_page = SettingsPage(
             self.shell.content,
             app=self,
-            on_check_updates=self._manual_update_check,
         )
         self.profile_page = ProfilePage(self.shell.content, app=self)
 
@@ -283,28 +282,6 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self.shell_container.pack(fill=tk.BOTH, expand=True)
         if self.shell is not None:
             self.shell.navigate("writer")
-        self._schedule_update_check()
-
-    def _schedule_update_check(self) -> None:
-        """Weekly public GitHub Releases check after the main shell is ready."""
-        if not self.settings.get("updates.auto_check"):
-            return
-        try:
-            from resume_gui.update import schedule_launch_update_check
-
-            schedule_launch_update_check(self)
-        except Exception:
-            # Updater must never block or crash sign-in / shell entry.
-            pass
-
-    def _manual_update_check(self) -> None:
-        """Settings: check now, ignoring the weekly gate (fail soft)."""
-        try:
-            from resume_gui.update import manual_update_check
-
-            manual_update_check(self)
-        except Exception:
-            pass
 
     def _logout(self) -> None:
         self.flush_settings()

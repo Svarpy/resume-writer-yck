@@ -10,9 +10,8 @@ For the **v3.0.0Beta2** test cut only, `.github/workflows/release.yml` triggers
 on pushes to **``genpubv3``** (not ``main``). Do **not** merge this Beta2 cut
 to ``main``. After the test, revert the workflow branch filter to ``main``.
 
-Beta2 publishes a **normal** GitHub Release (no ``prerelease: true`` flag) so
-the in-app updater — which skips GitHub prereleases — can install it. The tag
-form ``v3.0.0Beta2`` is still a pre-release *version* relative to ``v3.0.0``.
+Beta2 publishes a **normal** GitHub Release (no ``prerelease: true`` flag). The
+tag form ``v3.0.0Beta2`` is still a pre-release *version* relative to ``v3.0.0``.
 
 Asset example: ``ResumeWriterv3.0.0Beta2.app.zip``.
 

@@ -29,10 +29,9 @@ FIELDS_PER_LINE = 4
 
 
 class SettingsPage(tk.Frame):
-    def __init__(self, parent, *, app, on_check_updates: Optional[Callable[[], None]] = None) -> None:
+    def __init__(self, parent, *, app) -> None:
         super().__init__(parent, bg=app.c("app_bg"), padx=16, pady=16)
         self.app = app
-        self.on_check_updates = on_check_updates
 
         self.search_var = tk.StringVar()
         self.selected_category = ALL_CATEGORIES
@@ -399,7 +398,6 @@ class SettingsPage(tk.Frame):
             "checklist": self._control_checklist,
             "records": self._control_records,
             "info": self._control_info,
-            "action": self._control_action,
         }
         return builders[definition.kind](definition, holder, error)
 
@@ -559,14 +557,6 @@ class SettingsPage(tk.Frame):
         label.configure(wraplength=620, justify=tk.LEFT)
         label.grid(row=0, column=0, sticky="w")
         self._info_labels[definition.key] = label
-        return lambda _value: None
-
-    def _control_action(self, definition, holder, error):
-        def run() -> None:
-            if definition.key == "updates.check_now" and self.on_check_updates is not None:
-                self.on_check_updates()
-
-        self.app._button(holder, definition.label, run).grid(row=0, column=0, sticky="w")
         return lambda _value: None
 
     # ------------------------------------------------------------------
