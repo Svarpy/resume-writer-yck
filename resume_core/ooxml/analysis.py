@@ -74,6 +74,7 @@ DATE_SINGLE = re.compile(rf"^\s*(?:{_MONTH}\s+\d{{4}}|\d{{4}})\s*$", re.IGNORECA
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 PHONE_RE = re.compile(r"\+?\d[\d\s().\-]{6,}\d")
 BULLET_RE = re.compile(r"^(\s*[•▸●○▪◦■□➢➤‣⁃*\-–]\s*(?:\t\s*)?)\S")
+INLINE_EDUCATION_RE = re.compile(r"^\s*(?:education|academic background|academics|qualifications?)\s*:\s*\S", re.IGNORECASE)
 LABEL_RE = re.compile(r"^(\s*[^:\n]{1,45}?:)(\s+)\S")
 SEPARATOR_SPLIT = re.compile(r"(\s*[|·•]\s*|\s{3,}|\t|\n)")
 URL_RE = re.compile(r"(?:https?://|www\.)\S+|\b(?:linkedin|github|gitlab|behance|medium|twitter|x)\.com/\S*|\b[\w-]+\.(?:io|dev|me|tech|co|org|net)(?:/\S*)?", re.IGNORECASE)
@@ -336,6 +337,21 @@ def analyze_document(document) -> DocumentAnalysis:
     elif pre_blocks:
         pass  # spacing between the contact line and the first heading: left untouched
 
+    # An "Education: degree, university" line closing a headingless block (no EDUCATION heading) is its own section.
+    for index, region in enumerate(list(regions)):
+        if region.has_heading:
+            continue
+        tail = [b for b in region.content if b.kind not in ("blank", "separator")]
+        if len(tail) > 1 and len(tail[-1].paragraphs) == 1 and INLINE_EDUCATION_RE.match(tail[-1].text):
+            block = tail[-1]
+            position = region.content.index(block)
+            if all(b.kind in ("blank", "separator") for b in region.content[position + 1:]):
+                del region.content[position:]
+                regions.insert(index + 1,
+                               Region(key="education", heading_text="", has_heading=False,
+                                      kind="education", content=[block]))
+                break
+
     # separators that precede a heading belong to that heading
     for index, region in enumerate(regions):
         if index == 0:
@@ -352,7 +368,7 @@ def analyze_document(document) -> DocumentAnalysis:
         _classify_region(region, sheet)
         key = canonical_key(region.heading_text) if region.has_heading else None
         if key is None:
-            key = "summary" if not region.has_heading else slugify(region.heading_text)
+            key = region.key or ("summary" if not region.has_heading else slugify(region.heading_text))
         base, n = key, 2
         while key in used_keys:
             key = f"{base}_{n}"
@@ -636,6 +652,14 @@ def _pick_exemplars(region: Region) -> None:
         elif role == "plain":
             ex.setdefault("plain", line)
         elif role == "unit":
+            # A short undated line right above the first dated line is the job's own heading
+            # ("Company, City" with the role and dates on the next line).
+            before = region.lines[:index]
+            prior = before[-1] if before else None
+            if ("head" not in ex and "unit" not in ex and prior is not None and prior.role == "plain"
+                    and all(l.role in ("blank", "plain") for l in before) and len(prior.text.split()) <= 8
+                    and not find_date(prior.text) and not prior.text.rstrip().endswith((".", ":"))):
+                ex["head"] = prior
             ex.setdefault("unit", line)
             if "company" not in ex:
                 ex["company"] = line

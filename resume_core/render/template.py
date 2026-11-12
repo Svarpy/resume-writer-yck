@@ -251,8 +251,43 @@ class _Generator:
                 set_paragraph_text(a.tagline.paragraph, c.tagline.strip())
             else:
                 self._remove_block(a.tagline)
+        for block in (a.name, a.tagline, a.contact, *a.contact_extra):
+            if block is not None and block.element.getparent() is not None and block.element.tag == P:
+                self._left_align(block.element)
         if a.contact is not None:
+            if a.name is None:
+                self._fill_name_in_contact_line(a.contact.paragraph, c)
             self._fill_contact_lines([a.contact, *a.contact_extra], c)
+
+    def _left_align(self, paragraph) -> None:
+        """Name and contact lines are never justified (a justified short line is stretched across the page)."""
+        if self.a.sheet.justification(paragraph) in ("both", "distribute", "thaiDistribute"):
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.text.paragraph import Paragraph
+
+            Paragraph(paragraph, None).alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    def _fill_name_in_contact_line(self, paragraph, c) -> None:
+        """A line such as ``Jane Roe – Engineer  jane@x.org | 555 | City``: the text before the first
+        contact item is the sample owner's name (and title); write the user's name (and tagline) there."""
+        text = paragraph_text(paragraph)
+        items = contact_items(text)
+        if not items or items[0].kind == "other":
+            return
+        prefix = text[: items[0].val_start]
+        body = prefix.rstrip()
+        if not re.search(r"[^\W\d_]", body):
+            return
+        trailing = prefix[len(body):]
+        split = re.match(r"^(.*?)(\s*[–—|:·-]\s*)(.+)$", body)
+        name = (getattr(c, "name", "") or "").strip()
+        tagline = (getattr(c, "tagline", "") or "").strip()
+        new = name + (split.group(2) + tagline if split and tagline and name else "")
+        if not name:
+            new, trailing = tagline, trailing if tagline else ""
+        replace_span(paragraph, 0, len(body), new)
+        if not new and trailing:
+            replace_span(paragraph, 0, len(trailing), "")
 
     def _remove_block(self, block) -> None:
         parent = block.element.getparent()
@@ -488,6 +523,8 @@ class _Generator:
         if region is not None:
             head.extend(deepcopy(b.element) for b in _leading_blanks(region))
         lines = self._content_elements(plan, region)
+        if lines and region is not None and columns <= 1:
+            lines = [*lines, *(deepcopy(b.element) for b in _trailing_blanks(region))]
         if columns > 1 and len(lines) > 1:
             size = -(-len(lines) // columns)
             chunks = [lines[i:i + size] for i in range(0, len(lines), size)]
@@ -644,6 +681,11 @@ class _Generator:
                     left_para = (paragraph, text)
         if date_para is not None:
             paragraph, (ds, de), text = date_para
+            tab = text.rfind("\t", ds, de)
+            if tab != -1:  # "Jan<tab>2024 – Sep 2025": the tab is the column break, keep it
+                ds = tab + 1
+                while ds < de and text[ds] == " ":
+                    ds += 1
             before, after = text[:ds], text[de:]
             wrapped = before.rstrip().endswith(("(", "[")) and after.strip()[:1] in (")", "]")
             # Keep the sample's punctuation around the date: "(date)" brackets and the separator
@@ -658,7 +700,10 @@ class _Generator:
                 self._set_left(paragraph, start, len(text), left)
                 replace_span(paragraph, ds, de, date)
                 return elements if len(elements) > 1 else elements[0]
-            replace_span(paragraph, ds, de if wrapped else len(text), date)
+            if not date and same_paragraph_left:
+                replace_span(paragraph, left_end, len(text), "")  # no date: no dangling "|" or tab either
+            else:
+                replace_span(paragraph, ds, de if wrapped else len(text), date)
             if same_paragraph_left:
                 self._set_left(paragraph, 0, left_end, left)
             elif left_para is not None and left_para[0] is not paragraph:
@@ -666,6 +711,31 @@ class _Generator:
         elif left_para is not None:
             self._set_left(left_para[0], 0, len(left_para[1]), left)
         return elements if len(elements) > 1 else elements[0]
+
+    def _head(self, line: Line, text: str):
+        """A job heading line (company, location) cloned from the sample: only the words change.
+
+        When the sample puts the two parts on either side of a tab ("Shipt <tab> Birmingham, AL") the
+        user's ``Company | Location`` is split the same way, so the location keeps its right-hand column.
+        """
+        element = self._clone_line(line)[0]
+        paragraph = element if element.tag == P else next(element.iter(P))
+        current = paragraph_text(paragraph)
+        start = len(current) - len(current.lstrip(" \t"))
+        end = max(len(current.rstrip(" \t")), start)
+        parts = [p.strip() for p in re.split(r"\s*\|\s*", text) if p.strip()] or [text.strip()]
+        inner = current.find("\t", start, end)
+        if inner != -1:
+            right_start = inner + 1
+            while right_start < end and current[right_start] == " ":
+                right_start += 1
+            left_end = len(current[:inner].rstrip(" "))
+            location = ", ".join(parts[1:])
+            replace_span(paragraph, right_start, end, location)
+            replace_span(paragraph, start, left_end, parts[0])
+            return element
+        replace_span(paragraph, start, end, " | ".join(parts))
+        return element
 
     def _set_left(self, paragraph, start: int, end: int, left: str) -> None:
         """Fill the left text, honouring the sample's ``segment | segment`` formatting.
@@ -751,6 +821,9 @@ class _Generator:
         role_index: dict[Optional[int], int] = {}
         previous_was_bullet = False
         company_ex, role_ex = self._job_exemplars(region)
+        head_ex = region.exemplars.get("head") if region is not None else None
+        pending_date = ""      # a company's dates, carried to its first role line when the company line has no date slot
+        head_waiting = False
         gap_ex = region.exemplars.get("gap") if region is not None else None
         emitted_unit = False
 
@@ -758,6 +831,17 @@ class _Generator:
             nonlocal previous_was_bullet, emitted_unit
             if emitted_unit and previous_was_bullet and gap_ex is not None:
                 out.extend(self._clone_line(gap_ex))
+            nonlocal pending_date, head_waiting
+            if head_ex is not None:
+                if not is_role:  # company line -> the sample's own job heading; its dates move to the role line
+                    out.append(self._head(head_ex, left))
+                    pending_date, head_waiting = date, True
+                    previous_was_bullet = False
+                    emitted_unit = True
+                    return
+                if head_waiting and not date:
+                    date = pending_date
+                head_waiting = False
             built = self._unit(role_ex if is_role else company_ex, left, date)
             out.extend(built if isinstance(built, list) else [built])
             previous_was_bullet = False
@@ -804,13 +888,18 @@ class _Generator:
 
     def _education(self, plan: _Plan, region: Optional[Region]) -> list:
         out: list = []
-        unit_ex = self._ex(region, "unit", "company", "role")
+        own_unit = region is not None and any(k in region.exemplars for k in ("unit", "company", "role"))
+        unit_ex = self._ex(region, "unit", "company", "role") if own_unit or region is None else None
         plain_ex = self._ex(region, "plain", "bullet")
-        for entry in re.split(r"\n\s*\n", plan.text.strip()):
-            for line in clean_lines(entry):
-                stripped = line.strip()
-                if not stripped:
-                    continue
+        styled = [l for l in (region.lines if region is not None else []) if l.role in ("plain", "bullet", "skill")]
+        entries = [[l.strip() for l in clean_lines(e) if l.strip()] for e in re.split(r"\n\s*\n", plan.text.strip())]
+        if unit_ex is None and len(styled) == 1 and styled[0].role == "skill":
+            return [self._education_labeled(styled[0], entries)]
+        for lines in entries:
+            if unit_ex is None and styled:
+                out.extend(self._education_undated(lines, styled))
+                continue
+            for stripped in lines:
                 dated = _split_dated(stripped)
                 if dated:
                     built = self._unit(unit_ex, dated[0], dated[1])
@@ -818,6 +907,32 @@ class _Generator:
                 else:
                     out.append(self._plain(plain_ex, stripped))
         return [el for el in out if el is not None]
+
+    def _education_labeled(self, line: Line, entries: list[list[str]]):
+        """``Education: degree, university`` on one labeled line: keep the sample's label, fill the value."""
+        label = line.text.split(":", 1)[0].strip()
+        values = []
+        for lines in entries:
+            texts = []
+            for text in lines:
+                dated = _split_dated(text)
+                texts.append((dated[0] if dated else text).rstrip(" ,"))
+            if texts:
+                values.append(", ".join(texts))
+        return self._skill(line, f"{label}: {'; '.join(values)}")
+
+    def _education_undated(self, lines: list[str], styled: list[Line]) -> list:
+        """The sample's education has no dates (degree line, institution line, or one combined line):
+        write the entry in exactly those line styles, leaving the dates out as the sample does."""
+        texts = []
+        for line in lines:
+            dated = _split_dated(line)
+            texts.append(dated[0] if dated else line)
+        if len(styled) == 1:  # "Degree — Institution" on one line
+            sample = styled[0].text
+            joiner = next((j for j in (" — ", " – ", " - ") if j in sample), ", ")
+            return [self._plain(styled[0], joiner.join(t.rstrip(" ,") for t in texts))]
+        return [self._plain(styled[min(i, len(styled) - 1)], text) for i, text in enumerate(texts)]
 
 
 # --------------------------------------------------------------------------
@@ -884,6 +999,17 @@ def _leading_blanks(region: Region) -> list:
         else:
             break
     return blanks
+
+
+def _trailing_blanks(region: Region) -> list:
+    """Spacer paragraphs that close a section in the sample (the gap before the next heading)."""
+    leading = {id(b) for b in _leading_blanks(region)}
+    tail: list = []
+    for block in reversed(region.content):
+        if block.kind != "blank" or id(block) in leading:
+            break
+        tail.insert(0, block)
+    return tail
 
 
 def _flatten(elements) -> list:

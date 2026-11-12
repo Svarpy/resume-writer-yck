@@ -507,5 +507,151 @@ class TwoRowTableExperienceTests(unittest.TestCase):
                       [paragraph_text(p) for p in iter_paragraphs(result.element.body)])
 
 
+def _bold(document, text: str, size: int = 11):
+    run = document.add_paragraph().add_run(text)
+    run.bold, run.font.size = True, Pt(size)
+    return run
+
+
+class SampleShapeTests(unittest.TestCase):
+    """Layouts seen in real resumes: name inside the contact line, a heading line per job, undated education."""
+
+    def _build(self, name: str, fill, plan, texts, education=()) -> list[str]:
+        path = Path(_TEST_ROOT) / f"{name}.docx"
+        document = Document()
+        fill(document)
+        document.save(str(path))
+        content = ResumeContent(name="Jane Doe", email="jane@example.org", phone="+1 555 010 2030",
+                                location="Austin, TX", sections=texts, section_plan=plan, education_entries=education)
+        result = _generate(path, content)
+        return [paragraph_text(p) for p in iter_paragraphs(result.element.body)]
+
+    def test_name_and_title_in_the_contact_line_are_replaced(self) -> None:
+        def fill(d):
+            para = d.add_paragraph()
+            para.add_run("Rama Roe \u2013 Site Engineer ").bold = True
+            para.add_run("rama@example.com | 659-288-6262 | Lehi, Utah")
+            _bold(d, "SUMMARY", 12)
+            d.add_paragraph("A sample summary paragraph about the owner.")
+        texts = self._build("name_in_contact", fill,
+                            (SectionSpec("summary", "Summary", "paragraph", "SUMMARY", True),),
+                            {"summary": "Short summary."})
+        self.assertTrue(texts[0].startswith("Jane Doe"), texts[0])
+        for leaked in ("Rama", "Roe", "Site Engineer", "659"):
+            self.assertNotIn(leaked, texts[0])
+        self.assertIn("jane@example.org", texts[0])
+
+    def test_job_heading_line_keeps_company_and_moves_its_dates_to_the_role_line(self) -> None:
+        def fill(d):
+            d.add_paragraph("Your Name")
+            d.add_paragraph("a@b.org | 555 010 0100 | City")
+            _bold(d, "WORK EXPERIENCE", 12)
+            _bold(d, "Company Name City, ST")
+            d.add_paragraph("Software Engineer\tJan 2020 \u2013 Present")
+            d.add_paragraph("\u2022 Sample bullet one.")
+        experience = "\n".join(["Acme Corp | Oslo    June 2021 \u2013 Present", "Site Engineer",
+                                 "Fixed things.", "Globex | Rome    May 2018 \u2013 June 2021",
+                                 "Lead Engineer    May 2019 \u2013 June 2021", "Built things."])
+        texts = self._build("job_heading", fill,
+                            (SectionSpec("experience", "Work Experience", "experience", "WORK EXPERIENCE", True),),
+                            {"experience": experience})
+        self.assertIn("Acme Corp | Oslo", texts)
+        self.assertIn("Site Engineer\tJune 2021 \u2013 Present", texts)  # no date of its own: the company's
+        self.assertIn("Globex | Rome", texts)
+        self.assertIn("Lead Engineer\tMay 2019 \u2013 June 2021", texts)  # its own date wins
+        self.assertNotIn("Company Name", "\n".join(texts))
+
+    def test_education_without_dates_follows_the_samples_lines(self) -> None:
+        def fill(d):
+            d.add_paragraph("Your Name")
+            d.add_paragraph("a@b.org | 555 010 0100 | City")
+            _bold(d, "EDUCATION", 12)
+            _bold(d, "Bachelor of Arts, History")
+            d.add_paragraph("Old College")
+        education = "Master of Science\tAugust 2024 \u2013 May 2026\nSome University, AL | GPA 4.0"
+        texts = self._build("edu_undated", fill,
+                            (SectionSpec("education", "Education", "education", "EDUCATION", True),), {},
+                            education=(education,))
+        self.assertEqual(texts[-2:], ["Master of Science", "Some University, AL | GPA 4.0"])
+
+    def test_spacer_paragraphs_between_sections_are_kept(self) -> None:
+        def fill(d):
+            d.add_paragraph("Your Name")
+            d.add_paragraph("a@b.org | 555 010 0100 | City")
+            _bold(d, "SUMMARY", 12)
+            d.add_paragraph("A sample summary.")
+            d.add_paragraph("")
+            _bold(d, "SKILLS", 12)
+            d.add_paragraph("Languages: Python")
+        texts = self._build("spacers", fill, (
+            SectionSpec("summary", "Summary", "paragraph", "SUMMARY", True),
+            SectionSpec("skills", "Skills", "skills", "SKILLS", True)),
+            {"summary": "Hello there.", "skills": "Tools: git"})
+        self.assertEqual(texts[texts.index("Hello there.") + 1], "")
+
+    def test_education_line_without_a_heading_becomes_its_own_section(self) -> None:
+        def fill(d):
+            para = d.add_paragraph()
+            para.add_run("Rama Roe \u2013 Site Engineer ").bold = True
+            para.add_run("rama@example.com | 659-288-6262 | Lehi, Utah")
+            d.add_paragraph("A sample summary paragraph about the owner.")
+            para = d.add_paragraph()
+            para.add_run("Education: ").bold = True
+            para.add_run("Master's Degree in Physics, Old University")
+            _bold(d, "TECHNICAL SKILLS", 12)
+            d.add_paragraph("Languages: Python")
+        path = Path(_TEST_ROOT) / "inline_education.docx"
+        document = Document()
+        fill(document)
+        document.save(str(path))
+        keys = [(r.key, r.kind, r.has_heading) for r in analyze_document(Document(str(path))).regions]
+        self.assertEqual(keys, [("summary", "paragraph", False), ("education", "education", False),
+                                ("skills", "skills", True)])
+        plan = (SectionSpec("summary", "Summary", "paragraph", "", False),
+                SectionSpec("education", "Education", "education", "", False),
+                SectionSpec("skills", "Skills", "skills", "TECHNICAL SKILLS", True))
+        texts = self._build("inline_education", fill, plan, {"summary": "Short summary.", "skills": "Tools: git"},
+                            education=("MSc Computing\tAugust 2024 \u2013 May 2026\nNew University, AL",))
+        self.assertIn("Education: MSc Computing, New University, AL", texts)
+        self.assertNotIn("Old University", "\n".join(texts))
+        self.assertEqual(texts.count("TECHNICAL SKILLS"), 1)
+
+    def test_name_and_contact_lines_are_never_justified(self) -> None:
+        def fill(d):
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+            d.styles["Normal"].paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            _bold(d, "Your Name", 14)
+            d.add_paragraph("a@b.org | 555 010 0100 | City")
+            _bold(d, "SUMMARY", 12)
+            d.add_paragraph("A sample summary.")
+        path = Path(_TEST_ROOT) / "justified.docx"
+        document = Document()
+        fill(document)
+        document.save(str(path))
+        content = ResumeContent(name="Jane Doe", email="jane@example.org", phone="", location="",
+                                sections={"summary": "Hello."},
+                                section_plan=(SectionSpec("summary", "Summary", "paragraph", "SUMMARY", True),))
+        result = _generate(path, content)
+        header, contact, _heading, summary = result.paragraphs[:4]
+        self.assertEqual(header.alignment, 0)   # WD_ALIGN_PARAGRAPH.LEFT
+        self.assertEqual(contact.alignment, 0)
+        self.assertIsNone(summary.alignment)    # body keeps the sample's own (justified) style
+
+    def test_job_heading_with_a_tab_keeps_the_location_in_its_column(self) -> None:
+        def fill(d):
+            d.add_paragraph("Your Name")
+            d.add_paragraph("a@b.org | 555 010 0100 | City")
+            _bold(d, "WORK EXPERIENCE", 12)
+            para = d.add_paragraph()
+            para.add_run("Company Name\tCity, ST").bold = True
+            d.add_paragraph("Software Engineer\tJan 2020 \u2013 Present")
+            d.add_paragraph("\u2022 Sample bullet one.")
+        texts = self._build("head_tab", fill,
+                            (SectionSpec("experience", "Work Experience", "experience", "WORK EXPERIENCE", True),),
+                            {"experience": "Acme Corp | Oslo    June 2021 \u2013 Present\nSite Engineer\nFixed things."})
+        self.assertIn("Acme Corp\tOslo", texts)
+
+
 if __name__ == "__main__":
     unittest.main()
