@@ -1,14 +1,16 @@
 __pycache__/
 *.pyc
 .DS_Store
-rendered_sample/
 .venv/
 build/
 dist/
 .worktrees/
 release/out/
 
+# ide/editor settings
+.cursor/
+.claude/
+
 # secrets and local data
 .env
 .env.*
-!.env.example
