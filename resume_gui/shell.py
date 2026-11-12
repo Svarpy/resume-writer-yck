@@ -123,6 +123,8 @@ class AppShell(tk.Frame):
     def navigate(self, page_key: str) -> None:
         if page_key not in self._nav_buttons and page_key != PROFILE_KEY:
             return
+        if page_key != self.active_page.get() and not self.app.confirm_leave_settings():
+            return                                  # unsaved Settings and the user chose to stay
         self.active_page.set(page_key)
         self._refresh_nav_styles()
         self.on_navigate(page_key)

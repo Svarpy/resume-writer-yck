@@ -18,6 +18,7 @@ from pathlib import Path
 os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 
 import tkinter as tk
+from tkinter import messagebox
 
 from docx import Document
 
@@ -280,7 +281,7 @@ class WriterAndSettingsTests(GuiCase):
         try:
             self.app.settings.set("personal.location", "Oslo")
             self.app.flush_settings()
-            self.assertIn("Not saved yet", self.app.settings_page.save_label.cget("text"))
+            self.assertIn("Not saved", self.app.settings_page.save_label.cget("text"))
         finally:
             self.world.http.down = False
         self.app.flush_settings()
@@ -321,7 +322,7 @@ class WriterAndSettingsTests(GuiCase):
         self.assertIn("output.preview", page._info_labels)
         self.assertEqual(page._info_labels["output.preview"].cget("text"), self.app.output_var.get())
 
-    def test_typing_saves_immediately_without_leaving_the_field(self) -> None:
+    def test_typing_applies_immediately_without_leaving_the_field(self) -> None:
         page = self.app.settings_page
         page._select_category("Personal Details")
         _pump(self.app)
@@ -358,6 +359,132 @@ class WriterAndSettingsTests(GuiCase):
         accent.event_generate("<KeyRelease>", when="now")
         _pump(self.app)
         self.assertEqual(self.app.settings.get("appearance.accent_color"), "#010203")
+
+    def _type_into_settings(self, text: str) -> None:
+        """Type a new Name on the Settings page, as the user would."""
+        page = self.app.settings_page
+        self.app.shell.navigate("settings")
+        page._select_category("Personal Details")
+        _pump(self.app)
+        self.app.deiconify()
+        _pump(self.app)
+        entries = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Entry):
+                    entries.append(child)
+                walk(child)
+
+        walk(page.inner)
+        name_entry = entries[2]
+        name_entry.focus_force()
+        name_entry.delete(0, "end")
+        for letter in text:                       # one key at a time
+            name_entry.insert("end", letter)
+            name_entry.event_generate("<KeyRelease>", when="now")
+        _pump(self.app)
+
+    def test_typing_in_settings_sends_nothing_until_save_is_pressed(self) -> None:
+        from unittest import mock
+
+        page = self.app.settings_page
+        self.app.flush_settings()
+        self.world.http.calls.clear()
+        self.assertEqual(str(page.save_button.cget("state")), "disabled")        # nothing to save yet
+        self._type_into_settings("Pat Typed")
+        self.assertEqual(self.world.http.count("PATCH"), 0)
+        self.assertEqual(str(page.save_button.cget("state")), "normal")
+        self.assertIn("unsaved", page.status_label.cget("text"))
+        self.app.flush_settings()
+        self.assertEqual(self.world.http.count("PATCH"), 0)                      # still just a draft
+        self.assertNotEqual(self.server_settings()["personal.name"], "Pat Typed")
+        with mock.patch.object(messagebox, "showerror"):
+            page.save_button.event_generate("<Button-1>")
+        _pump(self.app)
+        self.assertEqual(self.world.http.count("PATCH"), 1)                      # one request for all keys
+        self.assertTrue(self.server_settings()["personal.name"].startswith("Pat Typed"))
+        self.assertEqual(str(page.save_button.cget("state")), "disabled")
+
+    def test_typing_back_to_the_saved_value_is_not_a_change(self) -> None:
+        page = self.app.settings_page
+        original = self.app.settings.get("personal.name")
+        self._type_into_settings("Somebody Else")
+        self.assertTrue(self.app.settings_dirty())
+        self.app.settings.set("personal.name", original)    # the same value again
+        self.assertFalse(self.app.settings_dirty())
+        page.update_save_bar()
+        self.assertEqual(str(page.save_button.cget("state")), "disabled")
+
+    def test_leaving_settings_with_changes_asks_and_can_save_discard_or_stay(self) -> None:
+        from unittest import mock
+
+        original = self.app.settings.get("personal.name")
+        self._type_into_settings("Leaving Soon")
+        # Cancel: stay on Settings, changes kept.
+        with mock.patch.object(messagebox, "askyesnocancel", return_value=None):
+            self.app.shell.navigate("writer")
+        self.assertEqual(self.app.shell.active_page.get(), "settings")
+        self.assertTrue(self.app.settings_dirty())
+        # No: discard and leave.
+        with mock.patch.object(messagebox, "askyesnocancel", return_value=False):
+            self.app.shell.navigate("writer")
+        self.assertEqual(self.app.shell.active_page.get(), "writer")
+        self.assertEqual(self.app.settings.get("personal.name"), original)
+        self.assertFalse(self.app.settings_dirty())
+        # Yes: save and leave.
+        self._type_into_settings("Saved On Leave")
+        with mock.patch.object(messagebox, "askyesnocancel", return_value=True):
+            self.app.shell.navigate("writer")
+        self.assertEqual(self.app.shell.active_page.get(), "writer")
+        self.assertTrue(self.server_settings()["personal.name"].startswith("Saved On Leave"))
+
+    def test_leaving_settings_without_changes_does_not_ask(self) -> None:
+        from unittest import mock
+
+        self.app.shell.navigate("settings")
+        with mock.patch.object(messagebox, "askyesnocancel") as ask:
+            self.app.shell.navigate("writer")
+        ask.assert_not_called()
+
+    def test_closing_the_window_and_signing_out_ask_too(self) -> None:
+        from unittest import mock
+
+        self._type_into_settings("Unsaved At Exit")
+        with mock.patch.object(messagebox, "askyesnocancel", return_value=None) as ask:
+            self.app._logout()
+            self.app._on_close()
+        self.assertEqual(ask.call_count, 2)
+        self.assertTrue(self.client.signed_in)
+
+    def test_a_value_that_cannot_be_saved_blocks_save_and_counts_as_unsaved(self) -> None:
+        page = self.app.settings_page
+        self.app.shell.navigate("settings")
+        page._select_category("Appearance")
+        _pump(self.app)
+        accent = next(e for e in self._entries(page.inner) if e.get().startswith("#"))
+        self.app.deiconify()
+        accent.focus_force()
+        accent.delete(0, "end")
+        accent.insert(0, "rgb(1,")
+        accent.event_generate("<KeyRelease>", when="now")
+        _pump(self.app)
+        self.assertTrue(self.app.settings_dirty())
+        self.assertFalse(self.app.save_settings_draft())
+        self.assertIn("Not saved", page.save_label.cget("text"))
+
+    def _entries(self, widget):
+        for child in widget.winfo_children():
+            if isinstance(child, tk.Entry):
+                yield child
+            yield from self._entries(child)
+
+    def test_discard_button_restores_the_saved_values(self) -> None:
+        original = self.app.settings.get("personal.name")
+        self._type_into_settings("Oops")
+        self.app.discard_settings_draft()
+        self.assertEqual(self.app.settings.get("personal.name"), original)
+        self.assertEqual(str(self.app.settings_page.save_button.cget("state")), "disabled")
 
     def test_every_setting_is_shown_without_an_advanced_toggle(self) -> None:
         page = self.app.settings_page

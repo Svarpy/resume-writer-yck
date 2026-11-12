@@ -11,6 +11,7 @@
 - **Scrolling** with the wheel or trackpad now works with the pointer anywhere on every page (Settings, Formatter, Profile); the Profile page scrolls too.
 - **Stays signed in** across restarts until Sign Out (login token in an owner-only `session.json`, renewed through the new `POST /api/v1/auth/refresh` on every start; login tokens now last a year by default; the server being unreachable does not sign you out).
 - **Formatter**: each format shows only its name and font details, with Make Default, **Structure** (a preview of sections and fields), Download and **Modify** (reveals Replace File and Delete).
+- **Settings** no longer send a request for every keystroke: edits apply in the app at once and are sent in one request when you press the always-visible **Save Settings** button (disabled while nothing changed, with **Discard Changes**). Leaving Settings, signing out or closing the window with unsaved changes asks to save, discard or stay.
 - **Writer**: an Education box with a checkbox per entry saved in Settings (none can be ticked); ticking changes the entry's *Include in resume* setting.
 - **Settings**: Show Advanced is gone; every setting and every field is always shown.
 

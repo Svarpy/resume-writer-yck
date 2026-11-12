@@ -184,7 +184,7 @@ Open **Settings** in the sidebar. Settings are stored per user in MongoDB (throu
 
 The page works like the VS Code settings editor:
 
-- Everything is validated as you type (quietly while the value is still incomplete, with an error message once you leave the field or press Return) and sent to the server in one batch a moment after you stop typing. If the server cannot be reached, the page says "Not saved yet" and keeps retrying.
+- Everything is validated as you type (quietly while the value is still incomplete, with an error message once you leave the field or press Return) and applied in the app at once, but **nothing is sent to the server until you press Save Settings**, the always-visible button at the bottom of the page. Save sends every changed setting in one request and is disabled while nothing has changed; Discard Changes puts the saved values back. Leaving the page (another screen, Sign Out or closing the window) with unsaved changes asks whether to save, discard or stay. A value that cannot be accepted (an incomplete colour, say) blocks Save and counts as an unsaved change. If the server cannot be reached the page says "Not saved" and Save stays enabled. Changes made outside Settings (the Writer's Education checkboxes, the output folder button) are still saved automatically.
 - Colour settings accept `#1a2b3c`, `1a2b3c`, `#abc`, `rgb(26, 43, 60)`, `26 43 60`, `hsl(210, 40%, 17%)` or a colour name such as `orange`.
 - Scrolling (wheel or trackpad) works with the pointer anywhere on a page, on every page.
 

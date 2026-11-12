@@ -38,6 +38,7 @@ class SettingsPage(tk.Frame):
         self._info_labels: dict[str, tk.Label] = {}
         self._category_buttons: dict[str, tk.Label] = {}
         self._building = False
+        self._rejected: dict[str, str] = {}      # typed values that failed validation (not applied)
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -63,7 +64,7 @@ class SettingsPage(tk.Frame):
         app._button(bar, "Reset All", self._reset_all).grid(row=0, column=3)
         self.hint_label = app._label(
             bar,
-            "Type to search. Everything saves automatically as you type.",
+            "Type to search. Changes apply here at once; press Save Settings (bottom right) to store them.",
             muted=True,
         )
         self.hint_label.grid(row=1, column=0, columnspan=5, sticky="w", pady=(4, 0))
@@ -130,6 +131,17 @@ class SettingsPage(tk.Frame):
         self.json_error.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.json_view.grid_remove()
 
+        footer = app._track(tk.Frame(self, bg=app.c("app_bg")), "app_frame")
+        footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        footer.columnconfigure(0, weight=1)
+        self.status_label = app._label(footer, "All changes saved.", muted=True)
+        self.status_label.grid(row=0, column=0, sticky="w")
+        self.discard_button = app._button(footer, "Discard Changes", self._discard)
+        self.discard_button.grid(row=0, column=1, padx=(0, 8))
+        self.save_button = app._button(footer, "Save Settings", self._save, accent=True)
+        self.save_button.grid(row=0, column=2)
+        self.update_save_bar()
+
     def scroll_target(self):
         """What the app-wide wheel/trackpad handler scrolls on this page."""
         return self.json_text if self.json_view.winfo_ismapped() else self.canvas
@@ -169,10 +181,43 @@ class SettingsPage(tk.Frame):
         else:
             self.backup_button.pack_forget()
 
+    # ------------------------------------------------------------------
+    # Save / discard
+    # ------------------------------------------------------------------
+    def has_rejected_values(self) -> bool:
+        return bool(self._rejected)
+
+    def show_rejected_values(self) -> None:
+        self.save_label.configure(text="Not saved: fix " + "; ".join(self._rejected.values()))
+
+    def discard_typed_values(self) -> None:
+        """Rebuild the controls from the (reverted) settings, dropping anything typed but never applied."""
+        self._rejected.clear()
+        self._rebuild_list()
+        self.update_save_bar()
+
+    def update_save_bar(self) -> None:
+        """Enable Save / Discard only while there is something to save."""
+        if not hasattr(self, "save_button"):
+            return
+        dirty = self.app.settings_dirty()
+        state = tk.NORMAL if dirty else tk.DISABLED
+        for button in (self.save_button, self.discard_button):
+            button.configure(state=state)
+        self.status_label.configure(text="You have unsaved changes." if dirty else "All changes saved.")
+        self.app._refresh_custom_controls()
+
+    def _save(self) -> None:
+        self.app.save_settings_draft()
+
+    def _discard(self) -> None:
+        if self.app.settings_dirty() and messagebox.askyesno("Discard Changes", "Discard every unsaved change?"):
+            self.app.discard_settings_draft()
+
     def show_save_error(self, message: str) -> None:
         """Show (or clear) a message when settings could not be saved to the server."""
         try:
-            self.save_label.configure(text=f"Not saved yet: {message}. Changes are kept and will be retried." if message else "")
+            self.save_label.configure(text=f"Not saved: {message}" if message else "")
         except tk.TclError:
             pass
 
@@ -207,6 +252,7 @@ class SettingsPage(tk.Frame):
         return all(term in haystack for term in terms)
 
     def _rebuild_list(self) -> None:
+        self._rejected.clear()                    # the controls are rebuilt from the settings
         self._building = True
         try:
             for child in self.inner.winfo_children():
@@ -353,12 +399,17 @@ class SettingsPage(tk.Frame):
     def _commit(self, definition: SettingDef, value: Any, error: tk.Label, *, quiet: bool = False) -> bool:
         """Validate and save. ``quiet`` is used while typing: a half-typed value is simply not saved yet."""
         try:
-            self.app.settings.set(definition.key, value)
+            with self.app.settings_edit():
+                self.app.settings.set(definition.key, value)
         except SettingsError as exc:
+            self._rejected[definition.key] = f"{definition.label}: {exc}"
             if not quiet:
                 error.configure(text=str(exc))
+            self.update_save_bar()
             return False
+        self._rejected.pop(definition.key, None)
         error.configure(text="")
+        self.update_save_bar()
         return True
 
     def _control_bool(self, definition, holder, error):
@@ -535,7 +586,9 @@ class SettingsPage(tk.Frame):
     # Reset
     # ------------------------------------------------------------------
     def _reset_one(self, key: str) -> None:
-        self.app.settings.reset(key)
+        self._rejected.pop(key, None)
+        with self.app.settings_edit():
+            self.app.settings.reset(key)
         row = self._rows.get(key)
         if row is not None:
             row["error"].configure(text="")
@@ -544,7 +597,8 @@ class SettingsPage(tk.Frame):
     def _reset_all(self) -> None:
         if not messagebox.askyesno("Reset All", "Reset every setting to its default value?"):
             return
-        self.app.settings.reset_all()
+        with self.app.settings_edit():
+            self.app.settings.reset_all()
         self._rebuild_list()
 
     # ------------------------------------------------------------------
@@ -566,9 +620,13 @@ class SettingsPage(tk.Frame):
         except SettingsError as exc:
             self.json_error.configure(text=str(exc))
             return
-        self.app.settings.replace_all(parsed)
-        self.json_error.configure(text="Saved.", fg=self.app.c("ok_fg"))
+        with self.app.settings_edit():
+            self.app.settings.replace_all(parsed)
         self._rebuild_list_keep_json()
+        if self.app.save_settings_draft():
+            self.json_error.configure(text="Saved.", fg=self.app.c("ok_fg"))
+        else:
+            self.json_error.configure(text="Applied here but not saved to the server yet.")
 
     def _rebuild_list_keep_json(self) -> None:
         self._rebuild_list()

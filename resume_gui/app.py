@@ -6,8 +6,10 @@ machine by ``resume_client.engine``. This file holds no storage or business rule
 
 from __future__ import annotations
 
+import copy
 import os
 import webbrowser
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -41,6 +43,7 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self.title(f"Resume Writer {APP_VERSION}")
         self.geometry("1060x880")
         self.minsize(860, 700)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.client = client or ResumeClient(load_client_config())
         if not self.client.signed_in:
@@ -55,6 +58,11 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self._education_guard = False
         self._pending_changes: dict[str, Any] = {}
         self._flush_job: Optional[str] = None
+        # Edits made on the Settings page wait here (nothing is sent) until "Save Settings" is pressed.
+        self._baseline: dict[str, Any] = self.settings.all()      # what the server has
+        self._draft_keys: set[str] = set()
+        self._editing_settings = False
+        self._discarding = False
         self.settings.add_listener(self._on_settings_changed)
 
         self.dark_mode_var = tk.BooleanVar(value=bool(self.settings.get("appearance.dark_mode")))
@@ -114,6 +122,8 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
             self.settings.replace_all(view.settings())
         finally:
             self._loading_settings = False
+        self._baseline = self.settings.all()
+        self._draft_keys.clear()
         if info:
             self._apply_typography(info)
         self._apply_theme_from_settings()
@@ -126,15 +136,29 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self.heading_size_var.set(str(info["heading_size"]))
         self.body_size_var.set(str(info["body_size"]))
 
+    @contextmanager
+    def settings_edit(self):
+        """Edits made inside are a draft: applied locally at once, sent to the server only on Save Settings."""
+        previous, self._editing_settings = self._editing_settings, True
+        try:
+            yield
+        finally:
+            self._editing_settings = previous
+
     def _on_settings_changed(self, keys: tuple[str, ...]) -> None:
-        """Queue the change for the server and apply its effects to the running UI."""
+        """Apply a change to the running UI; queue it for the server (or hold it as a draft)."""
         if self._loading_settings:
             return
-        for key in keys:
-            self._pending_changes[key] = self.settings.get(key)
-        if self._flush_job is not None:
-            self.after_cancel(self._flush_job)
-        self._flush_job = self.after(SETTINGS_SAVE_DELAY_MS, self.flush_settings)
+        if self._editing_settings:
+            self._draft_keys.update(keys)                  # held until "Save Settings"
+        elif not self._discarding:
+            for key in keys:
+                self._pending_changes[key] = self.settings.get(key)
+                self._baseline[key] = self.settings.get(key)
+                self._draft_keys.discard(key)
+            if self._flush_job is not None:
+                self.after_cancel(self._flush_job)
+            self._flush_job = self.after(SETTINGS_SAVE_DELAY_MS, self.flush_settings)
         if any(key in _THEME_KEYS for key in keys):
             self._apply_theme_from_settings()
         if any(key.startswith(_WRITER_LAYOUT_PREFIXES) for key in keys):
@@ -143,8 +167,68 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
             self._populate_education_box()
         if hasattr(self, "settings_page"):
             self.settings_page.on_settings_changed(keys)
+            self.settings_page.update_save_bar()
         self._refresh_output_path()
         self._update_validation_state()
+
+    # -- the Settings page's draft ---------------------------------------
+    def settings_dirty(self) -> bool:
+        """True while the Settings page holds edits that are not saved (or a typed value that cannot be)."""
+        changed = any(self.settings.get(key) != self._baseline.get(key) for key in self._draft_keys)
+        return changed or (hasattr(self, "settings_page") and self.settings_page.has_rejected_values())
+
+    def save_settings_draft(self) -> bool:
+        """Send every changed setting to the server in one request. False when nothing could be saved."""
+        if hasattr(self, "settings_page") and self.settings_page.has_rejected_values():
+            self.settings_page.show_rejected_values()
+            return False
+        changes = {key: self.settings.get(key) for key in self._draft_keys
+                   if self.settings.get(key) != self._baseline.get(key)}
+        if changes:
+            try:
+                self.client.update_settings({**self._pending_changes, **changes}, format_id=self._format_id)
+            except ClientError as exc:
+                self.settings_page.show_save_error(str(exc))
+                return False
+            self._pending_changes = {}
+            self._baseline.update(changes)
+        self._draft_keys.clear()
+        self.settings_page.show_save_error("")
+        self.settings_page.update_save_bar()
+        return True
+
+    def discard_settings_draft(self) -> None:
+        """Put every unsaved edit back to what the server has."""
+        self._discarding = True
+        try:
+            for key in list(self._draft_keys):
+                if self.settings.get(key) != self._baseline.get(key):
+                    self.settings.set(key, copy.deepcopy(self._baseline[key]))
+        finally:
+            self._discarding = False
+        self._draft_keys.clear()
+        self.settings_page.discard_typed_values()
+        self.settings_page.show_save_error("")
+
+    def confirm_leave_settings(self) -> bool:
+        """Ask what to do with unsaved settings before leaving them. False means stay."""
+        if not self.settings_dirty():
+            return True
+        answer = messagebox.askyesnocancel(
+            "Unsaved settings",
+            "You have unsaved changes in Settings.\n\nYes: save them\nNo: discard them\nCancel: stay on Settings",
+            parent=self,
+        )
+        if answer is None:
+            return False
+        if answer:
+            return self.save_settings_draft()
+        self.discard_settings_draft()
+        return True
+
+    def _on_close(self) -> None:
+        if self.confirm_leave_settings():
+            self.destroy()
 
     def flush_settings(self) -> None:
         """Send pending setting changes to the server now (also called automatically after a short pause)."""
@@ -292,6 +376,8 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
             self.shell.navigate("writer")
 
     def _logout(self) -> None:
+        if not self.confirm_leave_settings():
+            return
         self.flush_settings()
         self.client.logout()
         self._show_auth()
