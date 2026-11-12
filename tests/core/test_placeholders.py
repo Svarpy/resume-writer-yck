@@ -278,6 +278,11 @@ class FillingTemplates(unittest.TestCase):
         self.assertEqual(document.core_properties.author, "Jane D.")
         self.assertEqual(document.core_properties.title, "Jane Doe Resume")
 
+    def test_blank_metadata_stays_empty_instead_of_using_a_default(self) -> None:
+        core = _build("ycksample").core_properties
+        for field in ("author", "subject", "title", "keywords", "last_modified_by"):
+            self.assertEqual(getattr(core, field), "", field)
+
     def test_no_template_means_a_clear_error(self) -> None:
         content = ResumeContent(name="x", email="", phone="", location="")
         with self.assertRaises(TemplateError):

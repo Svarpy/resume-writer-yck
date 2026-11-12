@@ -59,8 +59,8 @@ class ResumeContent:
     tagline: str = ""  # optional line under the name (Settings > Personal Details)
     # Settings > Metadata
     author: str = ""
-    subject: str = "my resume"
-    title_template: str = "{name} Resume"
+    subject: str = ""
+    title_template: str = ""
     keyword_count: int = 5
 
     def text_for(self, key: str) -> str:

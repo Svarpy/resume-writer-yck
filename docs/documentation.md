@@ -200,7 +200,7 @@ The page works like the VS Code settings editor:
 | Education | List of education entries (label, include in resume, degrees); one entry can hold several degrees, separated by a blank line (date after a Tab or `\|`, institution on the next line); add, remove, reorder |
 | Experience Parsing | Known companies: name, line prefixes to match, company date and per-role dates used when a pasted line has no date |
 | Fonts | Font choices, name/heading/text size choices (add your own fonts and sizes) |
-| Metadata | DOCX author (blank = personal name), subject, title template (`{name}`), keyword count |
+| Metadata | DOCX author, subject, title template (`{name}`), keyword count |
 | Output | Output directory, file name template, file name placeholder, date format, live "Resulting Path" preview |
 | Personal Details | Name, email, phone, location shown in the resume header |
 | Resume Sections | The section list: key, Writer label, DOCX heading, kind, width, shown, min/max words; add, remove, reorder |
@@ -284,8 +284,8 @@ The generated resume includes:
 
 The generated `.docx` metadata comes from Settings > Metadata:
 
-- Author: the Author setting, or the personal name when blank.
-- Subject, Title (from the title template) and Keywords (the first *Keyword Count* entries of the keywords section).
+- Author, Subject and Title (from the title template, where `{name}` is the resume name) are written exactly as set. Blank means empty: nothing is filled in on your behalf, and anything the template file carried is cleared.
+- Keywords: the first *Keyword Count* entries of the keywords section (empty when there is none).
 
 ## Required Fields And Validation
 

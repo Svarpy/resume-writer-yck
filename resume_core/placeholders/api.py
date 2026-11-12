@@ -30,11 +30,11 @@ def build_resume(content, fmt, output_path: Path) -> Path:
     data = build_data(content, info.shape)
     name = content.name.strip()
     properties = {
-        "author": content.author.strip() or name,
-        "subject": content.subject,
+        "author": content.author.strip(),            # empty stays empty: no property is invented
+        "subject": content.subject.strip(),
         "keywords": ", ".join(split_keywords(content.keyword_source(), content.keyword_count)),
-        "title": content.title_template.replace("{name}", name).strip() or "Resume",
-        "last_modified_by": content.author.strip() or name,
+        "title": content.title_template.replace("{name}", name).strip(),
+        "last_modified_by": content.author.strip(),
     }
     return fill_template(template, data, output_path, font_name=fmt.font_name, name_size=fmt.name_size,
                          heading_size=fmt.heading_size, body_size=fmt.body_size, properties=properties,

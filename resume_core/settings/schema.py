@@ -221,7 +221,7 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
     # --- Metadata ---------------------------------------------------------
     SettingDef(
         "metadata.author", "Metadata", "Author", "str", "",
-        "DOCX author property. Leave blank to use your Personal Details name.",
+        "DOCX author property. Leave blank to leave it empty.",
     ),
     SettingDef(
         "metadata.keyword_count", "Metadata", "Keyword Count", "int", 5,
@@ -229,12 +229,12 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         min=0, max=50,
     ),
     SettingDef(
-        "metadata.subject", "Metadata", "Subject", "str", "my resume",
-        "DOCX subject property.",
+        "metadata.subject", "Metadata", "Subject", "str", "",
+        "DOCX subject property. Leave blank to leave it empty.",
     ),
     SettingDef(
-        "metadata.title_template", "Metadata", "Title Template", "str", "{name} Resume",
-        "DOCX title property. {name} is replaced with the resume name.",
+        "metadata.title_template", "Metadata", "Title Template", "str", "",
+        "DOCX title property. {name} is replaced with the resume name. Leave blank to leave it empty.",
     ),
     # --- Output -----------------------------------------------------------
     SettingDef(
