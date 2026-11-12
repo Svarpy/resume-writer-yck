@@ -22,18 +22,34 @@ class ProfilePage(tk.Frame):
         self._token_rows: list[tk.Widget] = []
 
         self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.canvas = tk.Canvas(self, bg=app.c("app_bg"), highlightthickness=0, bd=0)
+        app._track(self.canvas, "canvas")
+        scrollbar = tk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.body = app._track(tk.Frame(self.canvas, bg=app.c("app_bg")), "app_frame")
+        self._body_window = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
+        self.body.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._body_window, width=e.width))
+        self.body.columnconfigure(0, weight=1)
         self._build()
+
+    def scroll_target(self):
+        """What the app-wide wheel/trackpad handler scrolls on this page."""
+        return self.canvas
 
     @property
     def client(self):
         return self.app.client
 
     def _build(self) -> None:
-        title = self.app._label(self, "Profile")
+        title = self.app._label(self.body, "Profile")
         title.configure(font=("Arial", 16, "bold"))
         title.grid(row=0, column=0, sticky="w", pady=(0, 8))
 
-        profile = self.app._section(self, "Account")
+        profile = self.app._section(self.body, "Account")
         profile.grid(row=1, column=0, sticky="ew")
         profile.columnconfigure(1, weight=1)
 
@@ -58,7 +74,7 @@ class ProfilePage(tk.Frame):
             row=4, column=1, sticky="w", pady=(4, 0)
         )
 
-        password = self.app._section(self, "Change Password")
+        password = self.app._section(self.body, "Change Password")
         password.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         password.columnconfigure(1, weight=1)
 
@@ -76,7 +92,7 @@ class ProfilePage(tk.Frame):
             row=2, column=1, sticky="w", pady=(4, 0)
         )
 
-        self.tokens_section = self.app._section(self, "Access Tokens (for Claude and other MCP apps)")
+        self.tokens_section = self.app._section(self.body, "Access Tokens (for Claude and other MCP apps)")
         self.tokens_section.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         self.tokens_section.columnconfigure(1, weight=1)
         self.app._label(

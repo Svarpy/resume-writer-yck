@@ -1,4 +1,4 @@
-"""Format service: upload a sample document, list/delete formats, choose the default."""
+"""Format service: upload a template document, replace/download it, list/delete formats, choose the default."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ import time
 import uuid
 from typing import Any, Optional
 
-from resume_core.formats import FormatError, analyze_sample
-from resume_core.sanitize import sanitize_sample
+from resume_core.formats import FormatError, analyze_template
 from resume_server.config import ServerConfig
 from resume_server.db import FormatRepo, UserRepo, now_iso
 from resume_server.errors import NotFoundError, ValidationFailed
@@ -19,7 +18,7 @@ def _slug(name: str) -> str:
 
 
 def public_format(doc: dict[str, Any], default_id: str) -> dict[str, Any]:
-    keys = ("font_name", "name_size", "heading_size", "body_size", "sections", "warnings", "created_at", "sanitized")
+    keys = ("font_name", "name_size", "heading_size", "body_size", "sections", "warnings", "outline", "created_at")
     return {"id": doc["_id"], "name": doc["name"], "is_default": doc["_id"] == default_id,
             "rev": int(doc.get("rev", 0)), **{k: doc.get(k) for k in keys}}
 
@@ -60,41 +59,54 @@ class FormatService:
     def revision(self, username: str) -> int:
         return int(((self.users.get(username) or {}).get("revs") or {}).get("formats", 0))
 
-    def sample(self, username: str, format_id: str) -> bytes:
+    def template_file(self, username: str, format_id: str) -> bytes:
         data = self.formats.file(username, format_id)
         if data is None:
             raise NotFoundError(f"Format '{format_id}' not found")
         return data
 
     # -- commands -----------------------------------------------------------------
-    def add(self, username: str, name: str, data: bytes) -> dict[str, Any]:
-        """Analyse an uploaded ``.docx`` and store it. The user's first format becomes the default."""
-        name = (name or "").strip()
-        if not name:
-            raise ValidationFailed("Format name is required")
+    def _analyse(self, data: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         if len(data) > self.config.max_upload_bytes:
             raise ValidationFailed(f"The document is larger than {self.config.max_upload_mb} MB")
         try:
-            info, defaults = analyze_sample(data)
+            return analyze_template(data)
         except FormatError as exc:
             raise ValidationFailed(str(exc)) from exc
-        stored, sanitized = sanitize_sample(data)  # the stored sample holds no personal text
-        if not sanitized:
-            info["warnings"] = [*info.get("warnings", []),
-                                "The personal text in this sample could not be removed automatically; the original is stored."]
+
+    def add(self, username: str, name: str, data: bytes) -> dict[str, Any]:
+        """Check an uploaded template ``.docx`` and store it. The user's first format becomes the default."""
+        name = (name or "").strip()
+        if not name:
+            raise ValidationFailed("Format name is required")
+        info, defaults = self._analyse(data)
         format_id = f"{_slug(name)}-{uuid.uuid4().hex[:8]}"
         first = not self.formats.list(username)
         doc = {
             "_id": format_id, "user": username, "name": name, **info,
             "settings_defaults": defaults, "overrides": {}, "settings_rev": 0, "rev": 1,
-            "size": len(stored), "sanitized": sanitized, "created_at": now_iso(), "created_ns": time.time_ns(),
+            "size": len(data), "created_at": now_iso(), "created_ns": time.time_ns(),
         }
-        self.formats.insert(doc, stored)
+        self.formats.insert(doc, data)
         if first:
             self._bump(username, default_format_id=format_id)
         else:
             self._bump(username)
         return public_format(doc, self._default_id(username))
+
+    def replace(self, username: str, format_id: str, data: bytes) -> dict[str, Any]:
+        """Replace a format's template in place: same entry, id and default status; settings are kept."""
+        current = self.formats.get(username, format_id)
+        if current is None:
+            raise NotFoundError(f"Format '{format_id}' not found")
+        info, defaults = self._analyse(data)
+        overrides = _carry_over(current.get("overrides") or {}, defaults)
+        updated = self.formats.replace(
+            username, format_id,
+            {**info, "settings_defaults": defaults, "overrides": overrides, "size": len(data),
+             "updated_at": now_iso()}, data)
+        self._bump(username)
+        return public_format(updated, self._default_id(username))
 
     def set_default(self, username: str, format_id: str) -> dict[str, Any]:
         doc = self.formats.get(username, format_id)
@@ -112,3 +124,36 @@ class FormatService:
             self._bump(username, default_format_id=remaining[0]["_id"] if remaining else "")
         else:
             self._bump(username)
+
+
+_KEEP_FROM_SECTION_OVERRIDE = ("label", "enabled", "width", "min_words", "max_words")
+
+
+def _carry_over(overrides: dict[str, Any], new_defaults: dict[str, Any]) -> dict[str, Any]:
+    """Format-scoped overrides that still make sense for a replaced template.
+
+    Section rows keep what the user chose (label, on/off, width, word limits) for sections that still exist;
+    the section list itself, the headings and their visibility follow the new template.
+    """
+    kept: dict[str, Any] = {}
+    rows = overrides.get("sections.items")
+    if rows:
+        old = {row.get("key"): row for row in rows}
+        merged = []
+        changed = False
+        for row in new_defaults.get("sections.items", []):
+            previous = old.get(row["key"])
+            if previous:
+                row = {**row, **{k: previous[k] for k in _KEEP_FROM_SECTION_OVERRIDE if k in previous}}
+                changed = changed or row != previous
+            merged.append(row)
+        if merged != new_defaults.get("sections.items"):
+            kept["sections.items"] = merged
+    keys = {row["key"] for row in new_defaults.get("sections.items", [])} | {"file_name"}
+    required = overrides.get("validation.required_fields")
+    if required is not None:
+        kept["validation.required_fields"] = [k for k in required if k in keys]
+    for key, value in overrides.items():
+        if key.startswith("fonts."):
+            kept[key] = value
+    return kept

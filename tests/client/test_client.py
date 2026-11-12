@@ -28,7 +28,7 @@ class ClientCacheTests(unittest.TestCase):
         self.world = World()
         self.http = self.world.http
         self.client = self.world.login(signup=True)
-        self.client.add_format("Ref", FIXTURES / "YcKResume.docx")
+        self.client.add_format("Ref", FIXTURES / "ycksample.docx")
 
     def test_settings_and_default_format_are_cached_between_calls(self) -> None:
         first = self.client.settings()
@@ -78,7 +78,7 @@ class ClientCacheTests(unittest.TestCase):
 
     def test_default_format_change_switches_cached_settings_and_sample(self) -> None:
         sections_before = [r["heading"] for r in self.client.settings().values["sections.items"]]
-        second = self.client.add_format("Second", FIXTURES / "YcKResumeFTR2.docx")
+        second = self.client.add_format("Second", FIXTURES / "rama.docx")
         self.assertEqual(self.client.default_format()["name"], "Ref")
         sample_before = self.client.sample_path()
         self.client.set_default_format(second["id"])
@@ -87,17 +87,17 @@ class ClientCacheTests(unittest.TestCase):
         sections_after = [r["heading"] for r in self.client.settings().values["sections.items"]]
         self.assertNotEqual(sections_before, sections_after)
         self.assertIn("WORK EXPERIENCE", sections_after)
-        from resume_core.formats import analyze_sample
+        from resume_core.formats import analyze_template
 
-        sample = self.client.sample_path().read_bytes()  # the stored (sanitised) sample of the second format
-        headings = [s["heading"] for s in analyze_sample(sample)[0]["sections"]]
-        self.assertIn("PROFESSIONAL SUMMARY", headings)
+        template = self.client.sample_path().read_bytes()  # the stored template of the second format
+        headings = [s["heading"] for s in analyze_template(template)[0]["sections"]]
+        self.assertIn("TECHNICAL SKILLS", headings)
 
     def test_sample_is_downloaded_once_and_replaced_per_revision(self) -> None:
         self.client.sample_path()
         self.http.calls.clear()
         self.client.sample_path()
-        self.assertEqual(self.http.count("/sample"), 0)
+        self.assertEqual(self.http.count("/file"), 0)
         self.client.delete_format(self.client.default_format()["id"])
         self.assertIsNone(self.client.default_format())
         with self.assertRaises(NoFormatError):
@@ -152,6 +152,62 @@ class ClientCacheTests(unittest.TestCase):
             revoked.settings()
 
 
+class SessionTests(unittest.TestCase):
+    """A signed-in user stays signed in across restarts until they sign out."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        self.first = self.world.login(signup=True)
+
+    def _restart(self):
+        client = self.world.client()                       # a new process with the same data folder
+        self.assertFalse(client.signed_in)
+        return client, client.restore_session()
+
+    def test_restart_restores_the_session_every_time(self) -> None:
+        for _ in range(4):
+            client, restored = self._restart()
+            self.assertTrue(restored)
+            self.assertEqual((client.username, client.profile_data["display_name"]), ("alice", "Alice A"))
+            self.assertEqual(client.profile()["username"], "alice")           # the restored token works
+        self.assertEqual(oct((self.world.root / "session.json").stat().st_mode & 0o777), "0o600")
+
+    def test_sign_out_forgets_the_session(self) -> None:
+        self.first.logout()
+        self.assertFalse((self.world.root / "session.json").exists())
+        client, restored = self._restart()
+        self.assertFalse(restored or client.signed_in)
+
+    def test_a_rejected_login_signs_out_and_is_forgotten(self) -> None:
+        (self.world.root / "session.json").write_text(
+            '{"api_url": "http://testserver", "token": "garbage", "profile": {"username": "alice"}}', encoding="utf-8")
+        client, restored = self._restart()
+        self.assertFalse(restored or client.signed_in)
+        self.assertFalse((self.world.root / "session.json").exists())
+
+    def test_an_unreachable_server_does_not_sign_the_user_out(self) -> None:
+        self.world.http.down = True
+        client, restored = self._restart()
+        self.assertTrue(restored)
+        self.assertTrue(client.signed_in)
+        self.assertEqual(client.username, "alice")
+        self.assertTrue((self.world.root / "session.json").exists())
+
+    def test_a_session_of_another_server_is_not_used(self) -> None:
+        from resume_client import ClientConfig, ResumeClient
+
+        other = ResumeClient(ClientConfig(api_url="http://elsewhere", data_root=self.world.root), http=self.world.http)
+        self.assertFalse(other.restore_session())
+        self.assertTrue((self.world.root / "session.json").exists())          # still there for the right server
+
+    def test_access_tokens_are_not_remembered_as_a_session(self) -> None:
+        token = self.first.create_token("mcp")["token"]
+        self.first.logout()
+        mcp = self.world.client()
+        mcp.use_access_token(token)
+        self.assertFalse((self.world.root / "session.json").exists())
+
+
 class ClientBackupTests(unittest.TestCase):
     def test_download_names_the_file_and_never_overwrites(self) -> None:
         import zipfile
@@ -159,7 +215,7 @@ class ClientBackupTests(unittest.TestCase):
 
         world = World()
         client = world.login(signup=True)
-        client.add_format("Ref", FIXTURES / "YcKResume.docx")
+        client.add_format("Ref", FIXTURES / "ycksample.docx")
         self.assertFalse(client.is_admin)
         with self.assertRaises(ApiError) as denied:
             client.download_backup(Path(tempfile.mkdtemp()))
@@ -184,7 +240,7 @@ class EngineTests(unittest.TestCase):
         self.client = self.world.login(signup=True)
         self.out = Path(tempfile.mkdtemp(prefix="rw-out-"))
 
-    def _with_format(self, fixture: str = "YcKResume.docx") -> engine.WriterContext:
+    def _with_format(self, fixture: str = "ycksample.docx") -> engine.WriterContext:
         self.client.add_format("Ref", FIXTURES / fixture)
         self.client.update_settings({"output.directory": str(self.out), "personal.email": "a@example.com"})
         return engine.load_context(self.client)
@@ -203,8 +259,10 @@ class EngineTests(unittest.TestCase):
         document = Document(str(path))
         lines = [paragraph_text(p) for p in iter_paragraphs(document.element.body)]
         self.assertEqual(lines[0], "Alice A")
-        self.assertIn("Professional Experience", lines)
-        self.assertIn("Acme  |  Remote\tMay 2020 – Present", lines)
+        self.assertIn("WORK EXPERIENCE", lines)
+        self.assertIn("Acme Remote", lines)
+        self.assertIn("May 2020 – Present", lines)
+        self.assertIn("Built it", lines)
         self.assertNotIn("Yashashchandra", "\n".join(lines))
         # Same company again is blocked by the duplicate check; switching the check off allows it.
         with self.assertRaises(engine.GenerationError) as caught:

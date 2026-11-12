@@ -1,7 +1,7 @@
 """Settings service: effective settings per user and format, validated by ``resume_core``.
 
 Only *overrides* are stored (values that differ from their defaults). A setting's default is the
-schema default, or - for format-scoped settings - the default derived from the format's sample.
+schema default, or - for format-scoped settings - the default derived from the format's template.
 """
 
 from __future__ import annotations

@@ -30,7 +30,7 @@ def create_app(config: Optional[ServerConfig] = None, db: Optional[Database] = N
         ),
         openapi_tags=[
             {"name": "Account", "description": "Sign up, sign in, profile, password and access tokens."},
-            {"name": "Formats", "description": "Upload sample resumes (formats), choose the default, download samples."},
+            {"name": "Formats", "description": "Upload resume templates (formats), replace or download them, choose the default."},
             {"name": "Settings", "description": "Per-user and per-format settings, validated and versioned."},
             {"name": "System", "description": "Health and version information (no sign-in needed)."},
             {"name": "Cache", "description": "Revision numbers clients use to validate their local cache."},

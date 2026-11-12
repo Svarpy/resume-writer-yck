@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "resume-writer"
 version = "4.0.0"
-description = "Resume Writer: API server, desktop app and MCP server that generate Word resumes from a sample format."
+description = "Resume Writer: API server, desktop app and MCP server that generate Word resumes from a template format."
 requires-python = ">=3.10"
-# resume_core: the document engine (OOXML parser + generator + settings schema), needed by everything.
+# resume_core: the document engine (template reader + filler + settings schema), needed by everything.
 dependencies = ["python-docx>=1.2.0"]
 
 [project.optional-dependencies]

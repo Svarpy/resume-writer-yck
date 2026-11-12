@@ -23,6 +23,7 @@ from resume_core.settings import Settings, SettingsError
 from resume_gui.auth_view import AuthView
 from resume_gui.formatter_page import FormatterPage
 from resume_gui.profile_page import ProfilePage
+from resume_gui.scrolling import ScrollRouter
 from resume_gui.settings_page import SettingsPage
 from resume_gui.shell import PROFILE_KEY, AppShell
 from resume_gui.toolkit import ThemedToolkit
@@ -31,7 +32,7 @@ from resume_gui.toolkit import ThemedToolkit
 _WRITER_LAYOUT_PREFIXES = ("sections.", "fonts.", "appearance.editor_font_size")
 _THEME_KEYS = ("appearance.dark_mode", "appearance.accent_color")
 SETTINGS_SAVE_DELAY_MS = 400  # edits are sent to the server in one batch shortly after you stop typing
-NO_FORMAT_NAME = "none yet (upload a sample in the Formatter)"
+NO_FORMAT_NAME = "none yet (upload a template in the Formatter)"
 
 
 class ResumeWriterApp(ThemedToolkit, tk.Tk):
@@ -42,6 +43,8 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self.minsize(860, 700)
 
         self.client = client or ResumeClient(load_client_config())
+        if not self.client.signed_in:
+            self.client.restore_session()      # stay signed in until the user clicks Sign Out
 
         # Settings of the signed-in user for the default format (defaults until sign-in).
         self.settings = Settings()
@@ -49,6 +52,7 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self._format_id = ""
         self._has_format = False
         self._loading_settings = False
+        self._education_guard = False
         self._pending_changes: dict[str, Any] = {}
         self._flush_job: Optional[str] = None
         self.settings.add_listener(self._on_settings_changed)
@@ -79,6 +83,8 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self._build_root_containers()
         self._bind_shortcuts()
         self._wire_validation()
+        self._active_page = "writer"
+        self._scroll_router = ScrollRouter(self, lambda: self._pages.get(self._active_page))
 
         if self.client.signed_in:
             self._enter_authenticated_shell(self.client.profile_data)
@@ -133,6 +139,8 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
             self._apply_theme_from_settings()
         if any(key.startswith(_WRITER_LAYOUT_PREFIXES) for key in keys):
             self._rebuild_writer()
+        elif "education.entries" in keys and not self._education_guard and hasattr(self, "education_box"):
+            self._populate_education_box()
         if hasattr(self, "settings_page"):
             self.settings_page.on_settings_changed(keys)
         self._refresh_output_path()
@@ -301,7 +309,7 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         if page is None:
             return
         page.lift()
-        self.settings_page.set_active(page_key == "settings")
+        self._active_page = page_key
         if page_key == "formatter":
             self.formatter_page.refresh()
         elif page_key == "settings":
@@ -368,11 +376,11 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         if not self._has_format:
             notice = self._label(
                 pad,
-                "No resume format yet. Open the Formatter and upload a sample resume (.docx): "
+                "No resume format yet. Open the Formatter and upload a template resume (.docx with {{placeholders}}): "
                 "the first one you upload becomes your default format.",
             )
             notice.configure(fg=self.c("error_fg"), wraplength=760, justify=tk.LEFT)
-            notice.grid(row=3, column=0, sticky="w", pady=(0, 8))
+            notice.grid(row=4, column=0, sticky="w", pady=(0, 8))
 
         controls = self._section(pad, "Format Options")
         controls.grid(row=0, column=0, sticky="ew")
@@ -415,8 +423,12 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
                 muted=True,
             ).grid(row=0, column=0, columnspan=2, sticky="w")
 
+        self.education_box = self._section(pad, "Education")
+        self.education_box.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        self._populate_education_box()
+
         output = self._section(pad, "Output")
-        output.grid(row=2, column=0, sticky="ew")
+        output.grid(row=3, column=0, sticky="ew")
         output.columnconfigure(1, weight=1)
 
         self._label(output, "File Path").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
@@ -441,6 +453,51 @@ class ResumeWriterApp(ThemedToolkit, tk.Tk):
         self.output_warning_label.configure(textvariable=self.output_warning_var)
         self.output_warning_label.grid(row=2, column=1, columnspan=3, sticky="w", pady=(6, 0))
         self._refresh_output_path()
+
+    # -- Education choices on the Writer page ---------------------------------------------
+    def _education_wanted(self) -> bool:
+        return any(row["kind"] == "education" for row in self.settings.rendered_sections())
+
+    def _populate_education_box(self) -> None:
+        """One checkbox per education entry from Settings; ticking one includes it in the resume (none is fine)."""
+        box = self.education_box
+        for child in box.winfo_children():
+            child.destroy()
+        self._prune_tracked_widgets()
+        if not self._education_wanted():
+            box.grid_remove()
+            return
+        box.grid()
+        entries = self.settings.get("education.entries")
+        if not entries:
+            self._label(box, "No education entries yet. Add them in Settings > Education.", muted=True).grid(
+                row=0, column=0, sticky="w")
+            return
+        for index, entry in enumerate(entries):
+            first_line = next((line.split("\t")[0].strip() for line in str(entry.get("text", "")).splitlines()
+                               if line.strip()), "")
+            title = (entry.get("label") or "").strip() or first_line or f"Education {index + 1}"
+            variable = tk.BooleanVar(value=bool(entry.get("enabled", True)))
+
+            def toggle(i=index, var=variable) -> None:
+                var.set(not var.get())
+                self._refresh_custom_controls()
+                self._set_education_enabled(i, var.get())
+
+            choice = self._choice_label(box, title, variable, toggle)
+            choice.grid(row=index // 3, column=index % 3, sticky="w", padx=(0, 18), pady=2)
+        self._refresh_custom_controls()
+
+    def _set_education_enabled(self, index: int, enabled: bool) -> None:
+        rows = [dict(row) for row in self.settings.get("education.entries")]
+        if not 0 <= index < len(rows) or bool(rows[index].get("enabled")) == enabled:
+            return
+        rows[index]["enabled"] = enabled
+        self._education_guard = True
+        try:
+            self.settings.set("education.entries", rows)
+        finally:
+            self._education_guard = False
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)

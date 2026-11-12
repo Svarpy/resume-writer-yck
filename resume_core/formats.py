@@ -1,22 +1,22 @@
-"""Resume formats: what is learned from an uploaded sample document.
+"""Resume formats: what is learned from an uploaded template document.
 
-A *format* is one sample ``.docx``. Uploading it produces:
+A *format* is one template ``.docx`` (a resume with ``{{placeholders}}``, see ``resume_core.placeholders``).
+Uploading it produces:
 
-* ``FormatInfo`` - small JSON-friendly metadata (name, font, sizes, sections found);
+* ``FormatInfo`` - small JSON-friendly metadata (name, font, sizes, sections found, outline);
 * ``settings_defaults`` - starting values for the format-scoped settings (Resume Sections,
-  Fonts, Required Fields) derived from the sample.
+  Fonts, Required Fields) derived from the template.
 
-The sample file itself is stored separately by whoever persists formats (the server).
+The template file itself is stored separately by whoever persists formats (the server).
 """
 
 from __future__ import annotations
 
 import copy
-import io
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from resume_core.ooxml.analysis import DocumentAnalysis, analyze_document
+from resume_core.placeholders import TemplateError, TemplateInfo, inspect_template
 from resume_core.settings.schema import (
     FILE_NAME_FIELD,
     FORMAT_SCOPED_KEYS,
@@ -29,6 +29,10 @@ KEYWORDS_SECTION_KEY = "top_skills"
 class FormatError(ValueError):
     """The uploaded document cannot be used as a resume format."""
 
+    def __init__(self, message: str, errors: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.errors = list(errors or [message])
+
 
 @dataclass
 class FormatInfo:
@@ -40,6 +44,7 @@ class FormatInfo:
     body_size: int = 11
     sections: list[dict[str, str]] = field(default_factory=list)  # [{key, heading, kind}]
     warnings: list[str] = field(default_factory=list)
+    outline: list[str] = field(default_factory=list)              # e.g. "experience > jobs(company) > roles(title)"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,12 +71,10 @@ def _with(values: list[int], *extra: int) -> list[int]:
     return sorted(merged)
 
 
-def settings_defaults_from_analysis(analysis: DocumentAnalysis) -> dict[str, Any]:
-    """Starting values of the format-scoped settings for a sample (its sections, fonts, required fields)."""
+def settings_defaults_from_template(info: TemplateInfo) -> dict[str, Any]:
+    """Starting values of the format-scoped settings for a template (its sections, fonts, required fields)."""
     defaults = {key: copy.deepcopy(SETTING_DEFS_BY_KEY[key].default) for key in FORMAT_SCOPED_KEYS}
-    if not analysis.regions:
-        return defaults
-    sections = analysis.section_summary()
+    sections = [dict(row) for row in info.sections]
     sections.append({
         "key": KEYWORDS_SECTION_KEY, "label": "Top 5 Skills For Metadata", "heading": "", "kind": "keywords",
         "width": "half", "enabled": True, "show_heading": True, "min_words": 0, "max_words": 0,
@@ -81,39 +84,37 @@ def settings_defaults_from_analysis(analysis: DocumentAnalysis) -> dict[str, Any
         row["key"] for row in sections if row["kind"] in ("paragraph", "skills", "experience", "keywords")
     ] + [FILE_NAME_FIELD]
     fonts = list(defaults["fonts.font_choices"])
-    if analysis.font_name and analysis.font_name.casefold() not in {f.casefold() for f in fonts}:
-        fonts.append(analysis.font_name)
+    if info.font_name and info.font_name.casefold() not in {f.casefold() for f in fonts}:
+        fonts.append(info.font_name)
     defaults["fonts.font_choices"] = fonts
-    defaults["fonts.name_size_choices"] = _with(defaults["fonts.name_size_choices"], analysis.name_size)
-    defaults["fonts.heading_size_choices"] = _with(defaults["fonts.heading_size_choices"], analysis.heading_size)
-    defaults["fonts.body_size_choices"] = _with(defaults["fonts.body_size_choices"], analysis.body_size)
+    defaults["fonts.name_size_choices"] = _with(defaults["fonts.name_size_choices"], info.name_size)
+    defaults["fonts.heading_size_choices"] = _with(defaults["fonts.heading_size_choices"], info.heading_size)
+    defaults["fonts.body_size_choices"] = _with(defaults["fonts.body_size_choices"], info.body_size)
     return defaults
 
 
-def analyze_sample(data: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Read an uploaded ``.docx`` and return ``(info fields, settings defaults)``.
+def analyze_template(data: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read an uploaded template ``.docx`` and return ``(info fields, settings defaults)``.
 
-    The info fields lack ``id`` and ``name`` (chosen by the caller).
+    The info fields lack ``id`` and ``name`` (chosen by the caller). Raises ``FormatError`` with every
+    problem found when the document is not a usable template.
     """
-    from docx import Document
-
-    if not data[:2] == b"PK":
-        raise FormatError("Only .docx Word documents can be used as a resume format.")
     try:
-        analysis = analyze_document(Document(io.BytesIO(data)))
-    except Exception as exc:  # noqa: BLE001 - corrupt or unsupported packages
-        raise FormatError(f"Could not read the Word document: {exc}") from exc
-    if not analysis.regions and analysis.name is None:
-        raise FormatError("The document has no recognisable resume content (no name or section headings).")
+        template = inspect_template(data)
+    except TemplateError as exc:
+        raise FormatError(str(exc)) from exc
+    if not template.ok:
+        raise FormatError("The template has problems: " + "; ".join(template.errors), template.errors)
     info = {
-        "font_name": analysis.font_name or "Arial",
-        "name_size": analysis.name_size,
-        "heading_size": analysis.heading_size,
-        "body_size": analysis.body_size,
+        "font_name": template.font_name or "Arial",
+        "name_size": template.name_size or 16,
+        "heading_size": template.heading_size or 12,
+        "body_size": template.body_size or 11,
         "sections": [
             {"key": row["key"], "heading": row["heading"] or row["label"], "kind": row["kind"]}
-            for row in analysis.section_summary()
+            for row in template.sections
         ],
-        "warnings": list(analysis.warnings),
+        "warnings": list(template.warnings),
+        "outline": list(template.outline),
     }
-    return info, settings_defaults_from_analysis(analysis)
+    return info, settings_defaults_from_template(template)

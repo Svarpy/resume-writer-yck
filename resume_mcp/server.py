@@ -15,7 +15,7 @@ from resume_client import ClientError, ResumeClient, engine, load_client_config
 from resume_core.settings import SETTING_DEFS_BY_KEY
 
 INSTRUCTIONS = """\
-Resume Writer creates Word resumes on the user's own computer from their uploaded sample format.
+Resume Writer creates Word resumes on the user's own computer from their uploaded template format.
 1. Call list_sections to see which sections to write for the default format (keys, labels, requirements).
 2. Write the text for each section and call generate_resume(company, sections).
 It returns "success" or "failure: <reason>"; fix what the reason says and retry. Files are saved to the
@@ -122,7 +122,7 @@ class ResumeTools:
         return self._guard(run)
 
     def upload_format(self, name: str, file_path: str) -> str:
-        """Upload a sample .docx (a path on this computer) as a new format."""
+        """Upload a template .docx (a resume with {{placeholders}}; a path on this computer) as a new format."""
         def run() -> str:
             path = Path(file_path).expanduser()
             if not path.is_file():

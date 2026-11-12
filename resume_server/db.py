@@ -102,6 +102,15 @@ class FormatRepo:
         doc = self.files.find_one({"_id": format_id, "user": username})
         return bytes(doc["data"]) if doc else None
 
+    def replace(self, username: str, format_id: str, fields: dict[str, Any], data: bytes) -> Optional[dict[str, Any]]:
+        """Swap the template document and metadata of a format in place (same id, same owner)."""
+        doc = self.formats.find_one_and_update(
+            {"_id": format_id, "user": username}, {"$set": fields, "$inc": {"rev": 1, "settings_rev": 1}},
+            return_document=True)
+        if doc is not None:
+            self.files.update_one({"_id": format_id, "user": username}, {"$set": {"data": data}})
+        return doc
+
     def delete(self, username: str, format_id: str) -> bool:
         self.files.delete_one({"_id": format_id, "user": username})
         return self.formats.delete_one({"_id": format_id, "user": username}).deleted_count == 1

@@ -1,7 +1,7 @@
 """Local resume generation: validation, output path, duplicate check and writing the document.
 
 Everything here runs on the user's machine and works on plain data (a ``Settings`` object, the format
-info and the sample's local path), so the desktop app and the MCP server share exactly the same rules.
+info and the template's local path), so the desktop app and the MCP server share exactly the same rules.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ class GenerationError(ClientError):
 
 @dataclass
 class WriterContext:
-    """Everything needed to write a resume: settings, the default format and its local sample."""
+    """Everything needed to write a resume: settings, the default format and its local template."""
 
     settings: Settings
     format_info: dict[str, Any]
@@ -43,10 +43,10 @@ class WriterContext:
 
 
 def load_context(client: ResumeClient) -> WriterContext:
-    """Fetch (from cache when possible) the settings, default format and sample for the signed-in user."""
+    """Fetch (from cache when possible) the settings, default format and template for the signed-in user."""
     info = client.default_format()
     if not info:
-        raise NoFormatError("No resume format yet. Upload a sample document first.")
+        raise NoFormatError("No resume format yet. Upload a template document first.")
     return WriterContext(client.settings().settings(), info, client.sample_path(), client.username)
 
 

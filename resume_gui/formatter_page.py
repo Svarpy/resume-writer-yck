@@ -1,4 +1,4 @@
-"""Formatter page: primary format selection and saved-format CRUD."""
+"""Formatter page: default format selection and saved-format management (upload, replace, download, delete)."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class FormatterPage(tk.Frame):
         self._specs: list[dict] = []
         self._name_by_id: dict[str, str] = {}
         self._id_by_label: dict[str, str] = {}
+        self._modifying: set[str] = set()       # formats whose Replace File / Delete buttons are shown
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -51,7 +52,16 @@ class FormatterPage(tk.Frame):
 
         actions = self.app._section(self, "Formats")
         actions.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        self.app._button(actions, "Add Format", self._add_format, accent=True).pack(side=tk.LEFT)
+        self.app._label(
+            actions,
+            "A format is a Word resume with {{placeholders}} (for example {{name}} or {{#jobs}} ... {{/jobs}}). "
+            "Ask an AI tool to turn your sample resume into one with the prompt below, then upload the result.",
+            muted=True,
+        ).pack(anchor="w", pady=(0, 8))
+        buttons = self.app._track(tk.Frame(actions, bg=self.app.c("panel_bg")), "panel_frame")
+        buttons.pack(anchor="w")
+        self.app._button(buttons, "Add Format", self._add_format, accent=True).pack(side=tk.LEFT)
+        self.app._button(buttons, "Copy AI Prompt", self._copy_prompt).pack(side=tk.LEFT, padx=(8, 0))
 
         list_section = self.app._section(self, "Saved Formats")
         list_section.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
@@ -99,6 +109,10 @@ class FormatterPage(tk.Frame):
         self.app._track(dropdown, "option")
         self.app._track(dropdown["menu"], "menu")
 
+    def scroll_target(self):
+        """What the app-wide wheel/trackpad handler scrolls on this page."""
+        return self.list_canvas
+
     def _on_list_configure(self, _event=None) -> None:
         self.list_canvas.configure(scrollregion=self.list_canvas.bbox("all"))
 
@@ -135,7 +149,7 @@ class FormatterPage(tk.Frame):
             row.grid(row=0, column=0, sticky="ew")
             self.app._label(
                 row,
-                "No formats yet. Click Add Format and upload a sample resume (.docx). "
+                "No formats yet. Click Add Format and upload a template resume (.docx with {{placeholders}}). "
                 "It becomes your default format.",
                 muted=True,
             ).grid(row=0, column=0, sticky="w")
@@ -148,25 +162,32 @@ class FormatterPage(tk.Frame):
             row.grid(row=index, column=0, sticky="ew")
             row.columnconfigure(0, weight=1)
             title = f"{spec['name']}  (default)" if spec["id"] == primary_id else spec["name"]
-            sections = " · ".join(section["heading"] for section in spec["sections"])
             detail = (
                 f"{title}\n"
                 f"Font {spec['font_name']} · Name {spec['name_size']} · "
                 f"Heading {spec['heading_size']} · Body {spec['body_size']}"
             )
-            if sections:
-                detail += f"\nSections found in the sample: {sections}"
             label = self.app._label(row, detail)
             label.configure(justify=tk.LEFT)
             label.grid(row=0, column=0, sticky="w")
+            buttons = self.app._track(tk.Frame(row, bg=self.app.c("panel_bg")), "panel_frame")
+            buttons.grid(row=0, column=1, sticky="ne", padx=(8, 0))
             if spec["id"] != primary_id:
-                self.app._button(row, "Make Default", lambda s=spec: self._make_default(s)).grid(
-                    row=0, column=1, padx=(8, 4)
-                )
-            self.app._button(row, "Delete", lambda s=spec: self._delete_format(s)).grid(
-                row=0, column=2, padx=(4, 4)
-            )
+                self.app._button(buttons, "Make Default", lambda s=spec: self._make_default(s)).pack(
+                    side=tk.LEFT, padx=(0, 6))
+            self.app._button(buttons, "Structure", lambda s=spec: self._show_structure(s)).pack(
+                side=tk.LEFT, padx=(0, 6))
+            self.app._button(buttons, "Download", lambda s=spec: self._download_format(s)).pack(
+                side=tk.LEFT, padx=(0, 6))
+            self.app._button(buttons, "Modify", lambda s=spec: self._toggle_modify(s)).pack(side=tk.LEFT)
+            if spec["id"] in self._modifying:
+                more = self.app._track(tk.Frame(row, bg=self.app.c("panel_bg")), "panel_frame")
+                more.grid(row=1, column=1, sticky="e", pady=(6, 0))
+                self.app._button(more, "Replace File", lambda s=spec: self._replace_format(s)).pack(
+                    side=tk.LEFT, padx=(0, 6))
+                self.app._button(more, "Delete", lambda s=spec: self._delete_format(s)).pack(side=tk.LEFT)
             self._format_rows.append(row)
+        self.app._prune_tracked_widgets()
 
     @staticmethod
     def _label_for(spec) -> str:
@@ -249,7 +270,7 @@ class FormatterPage(tk.Frame):
 
     def _add_format(self) -> None:
         path = filedialog.askopenfilename(
-            title="Upload Word document",
+            title="Upload template (.docx with {{placeholders}})",
             filetypes=[("Word documents", "*.docx"), ("All files", "*.*")],
         )
         if not path:
@@ -269,6 +290,87 @@ class FormatterPage(tk.Frame):
         self._notify_primary_changed()
         messagebox.showinfo("Add Format", f"Saved format:\n{spec['name']}")
 
+    def _toggle_modify(self, spec: dict) -> None:
+        """Show (or hide) the buttons that change a format: Replace File and Delete."""
+        self._modifying.symmetric_difference_update({spec["id"]})
+        self.refresh()
+
+    def _show_structure(self, spec: dict) -> None:
+        """A read-only preview of what the template contains: sections, fields, and notes found at upload."""
+        lines = [f"{spec['name']}", ""]
+        lines.append(f"Font {spec['font_name']} · Name {spec['name_size']} · Heading {spec['heading_size']} · "
+                     f"Body {spec['body_size']}")
+        lines += ["", "Sections (in the order of the template):"]
+        for section in spec.get("sections") or []:
+            heading = section["heading"] if section["heading"] else "(no heading)"
+            lines.append(f"  {section['key']}  [{section['kind']}]  {heading}")
+        outline = spec.get("outline") or []
+        if outline:
+            lines += ["", "Structure (fields and repeating blocks):"] + [f"  {line}" for line in outline]
+        warnings = spec.get("warnings") or []
+        if warnings:
+            lines += ["", "Notes:"] + [f"  {warning}" for warning in warnings]
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Structure of {spec['name']}")
+        dialog.transient(self.winfo_toplevel())
+        dialog.configure(bg=self.app.c("panel_bg"))
+        body = self.app._track(tk.Frame(dialog, bg=self.app.c("panel_bg"), padx=16, pady=14), "panel_frame")
+        body.pack(fill=tk.BOTH, expand=True)
+        text = self.app._text_widget(body, height=min(28, max(10, len(lines) + 1)))
+        text.configure(width=96, wrap="none")
+        text.pack(fill=tk.BOTH, expand=True)
+        text.insert("1.0", "\n".join(lines))
+        text.configure(state="disabled")
+        self.app._button(body, "Close", dialog.destroy, accent=True).pack(anchor="e", pady=(10, 0))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.geometry("+%d+%d" % (self.winfo_toplevel().winfo_rootx() + 60, self.winfo_toplevel().winfo_rooty() + 60))
+
+    def _replace_format(self, spec: dict) -> None:
+        """Swap the template of an existing format; its entry, default status and settings are kept."""
+        path = filedialog.askopenfilename(
+            title=f"Replace the template of '{spec['name']}'",
+            filetypes=[("Word documents", "*.docx"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            updated = self.client.replace_format(spec["id"], Path(path))
+        except (ClientError, OSError) as exc:
+            messagebox.showerror("Replace File", str(exc))
+            return
+        self.refresh()
+        self._notify_primary_changed()
+        messagebox.showinfo("Replace File", f"Updated format:\n{updated['name']}")
+
+    def _download_format(self, spec: dict) -> None:
+        """Save the format's template .docx so it can be edited in Word and uploaded again with Replace File."""
+        safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in spec["name"]).strip() or "format"
+        path = filedialog.asksaveasfilename(
+            title="Save template", initialfile=f"{safe}_TEMPLATE.docx", defaultextension=".docx",
+            filetypes=[("Word documents", "*.docx")],
+        )
+        if not path:
+            return
+        try:
+            self.client.download_format(spec["id"], Path(path))
+        except (ClientError, OSError) as exc:
+            messagebox.showerror("Download", str(exc))
+            return
+        messagebox.showinfo("Download", f"Saved:\n{path}")
+
+    def _copy_prompt(self) -> None:
+        from resume_core.placeholders.prompt import AI_PROMPT
+
+        self.clipboard_clear()
+        self.clipboard_append(AI_PROMPT)
+        self.update()
+        messagebox.showinfo(
+            "AI Prompt",
+            "The prompt is on your clipboard. Paste it into an AI tool together with your sample resume (.docx); "
+            "upload the template it returns with Add Format.",
+            parent=self,
+        )
+
     def _delete_format(self, spec: dict) -> None:
         if not messagebox.askyesno("Delete Format", f"Delete format '{spec['name']}'?", parent=self):
             return
@@ -277,6 +379,7 @@ class FormatterPage(tk.Frame):
         except ClientError as exc:
             messagebox.showerror("Delete Format", str(exc))
             return
+        self._modifying.discard(spec["id"])
         self.refresh()
         self._notify_primary_changed()
 

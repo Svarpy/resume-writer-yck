@@ -49,7 +49,6 @@ class FieldDef:
     min: Optional[int] = None
     max: Optional[int] = None
     width: int = 18
-    advanced: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,20 +67,18 @@ class SettingDef:
     check: str = ""
     # info rows are shown on the Settings page but never written to settings.
     stored: bool = True
-    # Hidden on the Settings page until "Show Advanced" is switched on (still searchable).
-    advanced: bool = False
     # "user": one value per user. "format": one value per saved resume format.
     scope: str = "user"
     extra: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
 
 _SECTION_FIELDS = (
-    FieldDef("key", "Key", "str", "", width=14, advanced=True),
+    FieldDef("key", "Key", "str", "", width=14),
     FieldDef("label", "Writer label", "str", "", width=22),
     FieldDef("heading", "DOCX heading", "str", "", width=20),
     FieldDef("kind", "Kind", "choice", "paragraph", choices=SECTION_KINDS, width=12),
-    FieldDef("width", "Width", "choice", "half", choices=SECTION_WIDTHS, width=6, advanced=True),
-    FieldDef("show_heading", "Show heading", "bool", True, advanced=True),
+    FieldDef("width", "Width", "choice", "half", choices=SECTION_WIDTHS, width=6),
+    FieldDef("show_heading", "Show heading", "bool", True),
     FieldDef("enabled", "Show", "bool", True),
     FieldDef("min_words", "Min words", "int", 0, min=0, max=100000, width=6),
     FieldDef("max_words", "Max words", "int", 0, min=0, max=100000, width=6),
@@ -161,13 +158,11 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         "appearance.sidebar_mode", "Appearance", "Sidebar On Startup", "choice", "auto",
         "auto collapses the sidebar when the window is narrower than the width below.",
         choices=("auto", "expanded", "collapsed"),
-        advanced=True,
     ),
     SettingDef(
         "appearance.sidebar_auto_collapse_width", "Appearance", "Sidebar Auto-Collapse Width", "int", 1000,
         "Window width in pixels below which the sidebar starts collapsed (auto mode).",
         min=400, max=4000,
-        advanced=True,
     ),
     # --- Duplicate Check --------------------------------------------------
     SettingDef(
@@ -183,12 +178,10 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         "duplicate_check.extensions", "Duplicate Check", "File Types To Check", "str_list",
         [".docx", ".pdf"],
         "Only files with these extensions count as duplicates (one per line, e.g. .docx).",
-        advanced=True,
     ),
     SettingDef(
         "duplicate_check.case_sensitive", "Duplicate Check", "Case Sensitive Match", "bool", False,
         "When off, 'Acme' also matches 'acme'. The File Name value may appear anywhere in an existing file name.",
-        advanced=True,
     ),
     # --- Education --------------------------------------------------------
     SettingDef(
@@ -202,7 +195,6 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         "experience.known_companies", "Experience Parsing", "Known Companies", "records", [],
         "Optional. When a pasted company or role line has no date, the dates configured here are filled in.",
         fields=_COMPANY_FIELDS,
-        advanced=True,
     ),
     # --- Fonts ------------------------------------------------------------
     SettingDef(
@@ -235,7 +227,6 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         "metadata.keyword_count", "Metadata", "Keyword Count", "int", 5,
         "How many entries of the keywords section are written to the DOCX keywords property.",
         min=0, max=50,
-        advanced=True,
     ),
     SettingDef(
         "metadata.subject", "Metadata", "Subject", "str", "my resume",
@@ -244,18 +235,15 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
     SettingDef(
         "metadata.title_template", "Metadata", "Title Template", "str", "{name} Resume",
         "DOCX title property. {name} is replaced with the resume name.",
-        advanced=True,
     ),
     # --- Output -----------------------------------------------------------
     SettingDef(
         "output.company_placeholder", "Output", "File Name Placeholder", "str", "XXX",
         "Shown in the file name while the Writer File Name field is empty.",
-        advanced=True,
     ),
     SettingDef(
         "output.date_format", "Output", "File Name Date Format", "str", "%d%b",
         "Python strftime format for {date}, e.g. %d%b gives 09Nov.",
-        advanced=True,
     ),
     SettingDef(
         "output.directory", "Output", "Output Directory", "path", DEFAULT_OUTPUT_DIRECTORY,

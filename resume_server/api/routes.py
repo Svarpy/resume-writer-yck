@@ -85,6 +85,17 @@ def login(body: LoginBody, svc: Services = Depends(services)) -> dict[str, Any]:
     return {"token": token, "profile": profile}
 
 
+@router.post("/auth/refresh", tags=["Account"])
+def refresh(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+            svc: Services = Depends(services)) -> dict[str, Any]:
+    """Swap a valid login token for a new one (the desktop app does this each time it starts, so a signed-in
+    user stays signed in until they sign out)."""
+    if credentials is None or not credentials.credentials:
+        raise UnauthorizedError("Missing bearer token")
+    token, profile = svc.auth.refresh(credentials.credentials)
+    return {"token": token, "profile": profile}
+
+
 @router.post("/auth/password", status_code=204, tags=["Account"])
 def change_password(body: PasswordBody, user: str = Depends(current_user), svc: Services = Depends(services)) -> Response:
     svc.auth.change_password(user, body.old_password, body.new_password)
@@ -161,12 +172,20 @@ def get_format(format_id: str, user: str = Depends(current_user), svc: Services 
     return svc.formats.get(user, format_id)
 
 
-@router.get("/formats/{format_id}/sample", tags=["Formats"])
-def get_sample(format_id: str, user: str = Depends(current_user), svc: Services = Depends(services)) -> Response:
+@router.get("/formats/{format_id}/file", tags=["Formats"])
+def get_template_file(format_id: str, user: str = Depends(current_user),
+                      svc: Services = Depends(services)) -> Response:
     return Response(
-        content=svc.formats.sample(user, format_id),
+        content=svc.formats.template_file(user, format_id),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+@router.put("/formats/{format_id}/file", tags=["Formats"])
+async def replace_template_file(format_id: str, file: UploadFile = File(...), user: str = Depends(current_user),
+                                svc: Services = Depends(services)) -> dict[str, Any]:
+    data = await file.read(svc.formats.config.max_upload_bytes + 1)
+    return svc.formats.replace(user, format_id, data)
 
 
 @router.delete("/formats/{format_id}", status_code=204, tags=["Formats"])

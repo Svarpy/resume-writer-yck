@@ -6,7 +6,7 @@
 
 Version: v4 (branch `v4generic`; `APP_VERSION` in `resume_core/constants.py` is bumped at release time)
 
-Resume Writer creates a formatted `.docx` resume from your content, in the layout of a sample document you upload. It has three front ends on one engine: a desktop app (Tkinter), a REST API (FastAPI) and an MCP server for AI apps such as Claude. Data lives in MongoDB; documents are always generated on your own computer. It keeps the resume format consistent while almost everything about it (resume sections, personal details, fonts, education, metadata, output folder and file name, duplicate checks and required fields) is controlled from a per-user Settings page whose values are stored in MongoDB.
+Resume Writer creates a formatted `.docx` resume from your content, in the layout of a template document you upload (a Word resume with `{{placeholders}}`, see [format-templates.md](format-templates.md)). It has three front ends on one engine: a desktop app (Tkinter), a REST API (FastAPI) and an MCP server for AI apps such as Claude. Data lives in MongoDB; documents are always generated on your own computer. It keeps the resume format consistent while almost everything about it (resume sections, personal details, fonts, education, metadata, output folder and file name, duplicate checks and required fields) is controlled from a per-user Settings page whose values are stored in MongoDB.
 
 This file is not shown inside the app. The in-app Documentation page was removed in v4.
 
@@ -33,7 +33,7 @@ This file is not shown inside the app. The in-app Documentation page was removed
 Five packages in one repository. They can be installed together or separately (see `pyproject.toml` extras).
 
 ```text
-resume_core/     # the engine: OOXML parser + generator, settings schema/validation, format analysis. No I/O, no UI.
+resume_core/     # the engine: template reader + filler (placeholders), settings schema/validation. No I/O, no UI.
 resume_server/   # FastAPI + MongoDB: accounts, tokens, formats, settings. The ONLY place with database credentials.
 resume_client/   # API client + local disk cache + generation engine (shared by the desktop app and the MCP server).
 resume_gui/      # Tk desktop app (talks to the client only).
@@ -54,9 +54,9 @@ Dependencies point one way: `resume_gui` / `resume_mcp` → `resume_client` → 
                                                └─▶ local disk cache  +  document generation on this computer
 ```
 
-- **MongoDB** holds accounts (bcrypt hashes), personal access tokens (SHA-256 hashes), format metadata, the uploaded sample documents and setting overrides.
+- **MongoDB** holds accounts (bcrypt hashes), personal access tokens (SHA-256 hashes), format metadata, the uploaded template documents and setting overrides.
 - **The server** validates everything with `resume_core` (the same rules the desktop app uses) and enforces per-user isolation.
-- **Generation happens locally**: the client downloads the sample (once per revision), applies your cached settings and writes the `.docx` into your output folder on this computer. The MCP server answers the AI app with only `success` or `failure: <reason>`.
+- **Generation happens locally**: the client downloads the template (once per revision), applies your cached settings and writes the `.docx` into your output folder on this computer. The MCP server answers the AI app with only `success` or `failure: <reason>`.
 - **The desktop app and the MCP server can run at the same time**; they share the same account, the same server and the same cache folder.
 
 ### Run it
@@ -91,7 +91,7 @@ python -m unittest discover -s tests -t .
 
 Server tests run against an in-memory MongoDB (`mongomock`), so no database is needed.
 
-`tests/corpus/` builds 47 text-only resumes (fresher and experienced; centered/left/table/stacked headers, 9 heading styles, bullet styles including list numbering, 8 ways of placing dates, 5 skills layouts, two-column sidebar and table-row layouts, headers/footers, content controls, fragmented runs, numbered/colon headings, date-first lines) and checks each one: sections and kinds are understood; new content (different amounts, special characters, minimal) lands under the right headings with the sample's own formatting and date punctuation; no sample text remains; the sanitised copy gives identical output; and a generated resume is a valid sample again. Run it on its own with `python -m tests.corpus.run_corpus`.
+`tests/fixtures/templates/` holds four real templates (made from resumes with different layouts: table rows for dates, tab-aligned columns, merged company/role lines, an inline Education line). `tests/core/test_placeholders.py` reads and fills each of them and checks the output (no placeholder left, no sample text, the template's own formatting only).
 
 ### Configuration (`.env`)
 
@@ -99,7 +99,7 @@ Server tests run against an in-memory MongoDB (`mongomock`), so no database is n
 | --- | --- | --- |
 | `MONGODB_URI`, `MONGODB_DB` | server | MongoDB connection string and database name (default `resume-writer`) |
 | `JWT_SECRET` | server | signs login tokens (min. 24 characters; the server refuses to start with the placeholder) |
-| `JWT_EXPIRE_HOURS`, `API_HOST`, `API_PORT`, `MAX_UPLOAD_MB` | server | token lifetime, bind address, upload limit |
+| `JWT_EXPIRE_HOURS`, `API_HOST`, `API_PORT`, `MAX_UPLOAD_MB` | server | login token lifetime (default one year; the desktop app renews it every time it starts), bind address, upload limit |
 | `RW_API_URL` | desktop app, MCP | where the API is (default `http://127.0.0.1:8765`) |
 | `RW_API_TOKEN` | MCP | personal access token (Profile > Access Tokens) |
 | `RW_CACHE_TTL` | desktop app, MCP | seconds before cached data is re-checked (default 900) |
@@ -124,19 +124,19 @@ The server creates them at start-up (indexes included); the database is `MONGODB
 | `users` | accounts: username, bcrypt hash, display name, email, `role` (`user` or `admin`), default format, revision counters |
 | `api_tokens` | personal access tokens (SHA-256 hash and prefix only) |
 | `formats` | format metadata, sections found, font/sizes, settings defaults and per-format setting overrides |
-| `format_files` | the stored sample documents, with the author's personal text removed (see below) |
+| `format_files` | the stored template documents (Word files with `{{placeholders}}`, so no personal text) |
 | `settings` | user-wide setting overrides |
 | `system` | application system data, one document `_id: "app"` |
 
 The `system` document records the version history. On every server start it lists all known versions (`versions`, oldest first, each with `version`, `status`, `released_at`, `registered_at`), marks the newest one `status: "latest"` (the others `"previous"`), and sets `current_version` (the version of the running server), `latest_version`, `api_version` and `updated_at`. A new release (a bumped `APP_VERSION`) registers itself automatically the first time its server starts; an older server never demotes a newer version already recorded. Add the release date of past versions in `VERSION_HISTORY` (`resume_core/constants.py`). The same data is public at `GET /api/v1/system`.
 
-### Stored samples contain no personal text
+### Stored templates contain no personal text
 
-When a sample is uploaded the server keeps a *sanitised* copy: the sample is regenerated through the same generator with neutral placeholder content ("Your Name", "Company Name | Location", sample bullets, example email/phone), its hyperlink addresses and document properties are cleared, and the result is stored (roughly 12-32 KB). Page setup, styles, numbering, tab stops, borders, tables, columns and headers/footers are untouched, and a resume generated from the sanitised copy is identical to one generated from the original (this is tested on every sample). If a sample cannot be sanitised without changing how it behaves, the original is stored instead and the format shows a warning.
+A template holds only placeholders and the layout of the resume. The upload check warns when it still contains an email address or phone number.
 
 ### Local cache
 
-Settings, the default format and its sample document are cached on this computer (`<RW_DATA_DIR>/cache/...`) so they are not fetched on every use. Each cached item remembers the server's revision numbers. A tiny `/state` request re-checks them once per `RW_CACHE_TTL`; any change replaces the stale item:
+Settings, the default format and its template document are cached on this computer (`<RW_DATA_DIR>/cache/...`) so they are not fetched on every use. Each cached item remembers the server's revision numbers. A tiny `/state` request re-checks them once per `RW_CACHE_TTL`; any change replaces the stale item:
 
 - your own changes (settings, uploading/deleting a format, changing the default) update the cache and make every local process (desktop app, MCP server) re-check immediately;
 - changes made from another computer are picked up when the TTL expires;
@@ -168,7 +168,7 @@ Interactive documentation (Swagger UI) is served at `/docs` and ReDoc at `/redoc
 ## What The Application Includes
 
 - A left sidebar with **Writer**, **Formatter** and **Settings**, plus **Profile** and **Sign Out** at the bottom. When the sidebar is collapsed, Profile is shown as a person icon (the letter `P` if icons are unavailable).
-- **Writer**: font and size dropdowns, one text box per resume section (the sections come from Settings), the output file path, the File Name field and Generate DOCX.
+- **Writer**: font and size dropdowns, one text box per resume section (the sections come from Settings), an **Education** box with one checkbox per entry saved in Settings > Education (tick the ones to include; none is fine; the content itself is edited only in Settings), the output file path, the File Name field and Generate DOCX.
 - **Formatter**: saved resume formats, including formats extracted from an uploaded Word document.
 - **Settings**: every customisable option, grouped by category, see [Settings](#settings).
 - **Profile**: account display name, email and password, see [Profile](#profile).
@@ -185,9 +185,8 @@ Open **Settings** in the sidebar. Settings are stored per user in MongoDB (throu
 The page works like the VS Code settings editor:
 
 - Everything is validated as you type (quietly while the value is still incomplete, with an error message once you leave the field or press Return) and sent to the server in one batch a moment after you stop typing. If the server cannot be reached, the page says "Not saved yet" and keeps retrying.
-- Advanced settings are hidden until you press **Show Advanced**; searching always finds them.
 - Colour settings accept `#1a2b3c`, `1a2b3c`, `#abc`, `rgb(26, 43, 60)`, `26 43 60`, `hsl(210, 40%, 17%)` or a colour name such as `orange`.
-- Scrolling works with the mouse anywhere on the page.
+- Scrolling (wheel or trackpad) works with the pointer anywhere on a page, on every page.
 
 - Categories are listed alphabetically on the left, and settings are alphabetical inside each category. Pick a category to filter, or use the search box (matches name, key, description).
 - Edits are validated and saved immediately. Invalid values show a message under the setting and are not saved.
@@ -196,7 +195,7 @@ The page works like the VS Code settings editor:
 
 | Category | Settings |
 | --- | --- |
-| Appearance | Dark mode, accent colour, Writer text size; advanced: sidebar startup mode and auto-collapse width |
+| Appearance | Dark mode, accent colour, Writer text size, sidebar startup mode and auto-collapse width |
 | Duplicate Check | Enable/disable, folders to check (`{output_dir}` expands to the Output Directory), file types, case sensitivity |
 | Education | List of education entries (label, include in resume, degrees); one entry can hold several degrees, separated by a blank line (date after a Tab or `\|`, institution on the next line); add, remove, reorder |
 | Experience Parsing | Known companies: name, line prefixes to match, company date and per-role dates used when a pasted line has no date |
@@ -212,7 +211,7 @@ The page works like the VS Code settings editor:
 
 Some settings belong to the selected resume format (marked `format` on the page): **Resume Sections**, **Fonts** and **Required Fields**. Each saved format keeps its own copy in MongoDB; everything else (personal details, education, output, duplicate check, metadata, appearance) is shared by all formats of your account.
 
-When a format is uploaded its defaults come from the sample: the sections found in it (headings, order, kinds), its font and sizes, and the required fields for those sections. Making a format the default switches Resume Sections, Fonts and Required Fields to that format's values; **Reset** returns to what the sample defines. Before any format exists the page shows a generic section list; it is replaced as soon as the first format is uploaded.
+When a format is uploaded its defaults come from the template: the sections found in it (headings, order, kinds), its font and sizes, and the required fields for those sections. Making a format the default switches Resume Sections, Fonts and Required Fields to that format's values; **Reset** returns to what the template defines. Before any format exists the page shows a generic section list; it is replaced as soon as the first format is uploaded.
 
 ### Resume Sections
 
@@ -227,7 +226,7 @@ Each section has a **kind** that decides how it is written:
 | `education` | no (filled from Settings > Education) | one block per included education entry |
 | `keywords` | yes | not written; the first *Keyword Count* entries become DOCX keywords |
 
-Order in the list is the order in the resume. A blank *DOCX heading* uses the selected format's own heading (or the label for a section the format does not have). Advanced fields: *Key*, *Width* and *Show heading* (untick to write the section without a heading). Empty sections are skipped when the resume is written. Only one `education` and one `keywords` section may exist. For formats whose sections are plain paragraphs the order set here is used. For formats laid out in table cells (for example headings in different table rows) the sample's own order is kept, because moving content between cells would break the layout.
+The order of sections in the resume is the template's own order (the list order sets the Writer's box order). A blank *DOCX heading* uses the template's heading; type another text to rename it. Advanced fields: *Key*, *Width* and *Show heading* (untick to write the section without its heading). Empty sections are left out together with their heading. Only one `education` and one `keywords` section may exist. A section that has text but no block in the template makes Generate fail with a message (add `{{#key}} ... {{/key}}` to the template or switch the section off).
 
 ### File names
 
@@ -251,20 +250,13 @@ Order in the list is the order in the resume. A blank *DOCX heading* uses the se
 
 ## Formatter And Resume Formats
 
-There is no built-in resume format. On first use, open the **Formatter** and click **Add Format** to upload a Word document that has the layout you want. The first format you upload becomes your **default** and is the one the Writer uses. Upload more at any time and press **Make Default** (or choose it in the Default Format box) to switch; Resume Sections, Fonts and Required Fields in Settings switch with it. Deleting the default format makes the oldest remaining one the default; with none left the Writer asks for an upload again.
+There is no built-in resume format. On first use, open the **Formatter** and click **Add Format** to upload a *template*: a Word document that has the layout you want, with `{{placeholders}}` in place of the person's details (see [format-templates.md](format-templates.md); **Copy AI Prompt** gives you a prompt that makes an AI tool convert any sample resume into one). The first format you upload becomes your **default** and is the one the Writer uses. Upload more at any time and press **Make Default** (or choose it in the Default Format box) to switch; Resume Sections, Fonts and Required Fields in Settings switch with it. Deleting the default format makes the oldest remaining one the default; with none left the Writer asks for an upload again.
 
-Each uploaded document is kept and used as the template for every resume generated with that format.
+Each format shows its name and font details. **Structure** previews the template's sections, fields and repeating blocks (for example `experience > jobs(company, location, dates) > roles(title, dates) > bullets(text)`) and any notes found at upload. **Download** saves the template `.docx`; edit it in Word, press **Modify** (which shows **Replace File** and **Delete**) and **Replace File** to update the same format in place (its name, default status and your settings are kept; the section list follows the new file). Uploads with mistakes are rejected with every problem listed.
 
-The sample is read at the OOXML level (`resume_core/ooxml/`): the parser finds the name, an optional tagline, the contact line, every section (heading, separator before it, content) and, for each kind of line, an exemplar taken from the sample itself: a paragraph, a bullet, a `Label: values` skill line, a company/role row with a date (tab based, two-cell table, or text plus a separate date line), a role gap and a plain line. Headings are recognised by name (summary, skills, experience, education, certifications, projects and many aliases) and by how they look (style, bold/caps, border), so uncommon samples work too.
+Generation copies the template and fills it: repeated blocks (jobs, roles, bullets, skills, degrees) are cloned once per item, fields are replaced, and what is empty is removed with its separator. Page setup, styles, numbering, tab stops, borders, tables and run formatting therefore come from the template. The font and sizes chosen in the Writer are applied on top. Email and phone become links. Your text is read with one grammar: skills as `Label: values` lines; experience as `Company | Location   dates`, then a role line (with or without dates), then bullets; education as `Degree in Major<tab>dates` and `Institution, City | GPA: x`.
 
-Generation copies the sample document and rebuilds only the text: every exemplar is cloned and just its text changes. Page setup, styles, numbering, tab stops, borders, table layouts (including multi-column skills), headers/footers and run formatting therefore come from the sample. Details:
-
-- Name, tagline and contact items are replaced in place (blank items are dropped with their separator; email/phone hyperlinks are retargeted). Personal details found in headers or footers are replaced too.
-- Sections with no text are left out; sections the sample does not have are added using its heading and line styles; sections you hide are removed.
-- Table cells that held several columns of content (such as two columns of skills) are refilled column by column.
-- A line like `Company | Location` keeps its bold/normal run formatting segment by segment.
-
-Limits: formats are not previewed in the app; very unusual samples (text boxes, content only in drawings) may not be understood, in which case the Formatter shows what was detected. Check generated resumes in Word before sending them.
+Check generated resumes in Word before sending them.
 
 ## Profile
 
@@ -272,7 +264,7 @@ Open **Profile** from the sidebar (above Sign Out). It holds the account display
 
 Access tokens let the MCP server (or any API client) use your account without your password. Create one, copy it (it is shown once and stored only as a hash), and put it in `RW_API_TOKEN`. Revoke it here at any time.
 
-Sign-in: Enter submits the form from any field. The username (and, while the app stays open, the password) remains filled after Sign Out; only the username is remembered between launches, and the password is never written to disk.
+Sign-in: Enter submits the form from any field. You stay signed in: closing and reopening the app (any number of times) opens straight into the app until you click **Sign Out**. The login token is kept in `session.json` in the data folder (owner-only permissions) and renewed on every start; the password is never written to disk. A token the server rejects (revoked, or a different server) returns you to the login page; if the server cannot be reached you stay signed in and work from the cache. After Sign Out the username (and, while the app stays open, the password) remains filled on the login page.
 
 ## Generated Resume Behavior
 

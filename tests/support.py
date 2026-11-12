@@ -12,7 +12,7 @@ from resume_client import ClientConfig, ResumeClient
 from resume_server.api import create_app
 from resume_server.config import ServerConfig
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "formats"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "templates"
 SERVER = ServerConfig(mongodb_uri="mongomock://", jwt_secret="y" * 40)
 
 

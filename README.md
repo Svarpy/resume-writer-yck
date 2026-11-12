@@ -4,7 +4,7 @@ A small Python desktop application that collects resume content and writes a `.d
 
 ## Features
 
-- Desktop app (Tkinter) with a sidebar: **Writer**, **Formatter**, **Settings**, and **Profile** / **Sign Out** at the bottom (the collapsed sidebar shows a person icon for Profile).
+- Desktop app (Tkinter) with a sidebar: **Writer**, **Formatter**, **Settings**, and **Profile** / **Sign Out** at the bottom (the collapsed sidebar shows a person icon for Profile). You stay signed in across restarts until you sign out; the wheel or trackpad scrolls any page with the pointer anywhere on it.
 - Local accounts: each user has their own profile, saved formats and settings.
 - **Writer**: dropdowns for font, name size, heading size and text size, and one text box per resume section. Keyboard support: Tab moves between fields, and Command+Return on Mac or Ctrl+Enter on Windows/Linux generates the DOCX when valid.
 - **Settings** (saved per user as `settings.json`, edited VS Code style with search, categories, reset and a raw JSON editor) controls almost everything:
@@ -21,7 +21,7 @@ A small Python desktop application that collects resume content and writes a `.d
 - Dated Job Experience lines such as `Company | Location January 2025 - May 2026` are aligned with fixed left/right columns, and all other lines become bullets by default. In experience bullets, spaced em-dashes (` — `) become `, `.
 - Email and phone hyperlinks and horizontal separator rules in the generated Word file.
 - DOCX metadata (author, subject, title, keywords) comes from Settings > Metadata.
-- Formatter: there is no built-in format. Upload a sample Word document on first use (it becomes the default; change the default any time); an OOXML parser reads its sections and line styles and every resume generated with that format is the sample's own layout filled with your content. Sections, fonts and required fields are settings per format.
+- Formatter: there is no built-in format. A format is a Word *template*: your resume with `{{placeholders}}` instead of the person's details (see [docs/format-templates.md](docs/format-templates.md); the app can copy a prompt that makes an AI tool convert any sample resume into one). Upload it once (it becomes the default; change the default any time), download it to edit it and replace it in place. Every resume generated with a format is the template's own layout filled with your content. Sections, fonts and required fields are settings per format.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ Three front ends on one engine, with MongoDB for data and the local computer for
 
 | Package | What it is |
 | --- | --- |
-| `resume_core` | The engine: OOXML parser + generator, settings schema and validation. No I/O. |
+| `resume_core` | The engine: template reader and filler, settings schema and validation. No I/O. |
 | `resume_server` | FastAPI + MongoDB: accounts, access tokens, formats, settings. The only place with database credentials. |
 | `resume_client` | API client + local disk cache + the generation engine used by the GUI and MCP. |
 | `resume_gui` | The Tk desktop app. |
@@ -64,7 +64,5 @@ publishes a GitHub Release. See [RELEASE.md](RELEASE.md) for the cut checklist
 (`bump APP_VERSION` + tag `vX.Y.Z` when merging to `main`).
 
 The UI uses explicitly styled plain Tk widgets instead of `ttk` because macOS's bundled Tk 8.5 can render `ttk` controls incorrectly in dark mode.
-
-The default format uses US Letter with 0.75 inch margins, compact paragraph spacing and Arial; other formats come from the Formatter.
 
 User documentation lives in [docs/documentation.md](docs/documentation.md) (and in Notion); it is not shown inside the app.

@@ -43,8 +43,8 @@ class McpToolTests(unittest.TestCase):
             self.assertTrue(call().startswith("failure: No resume format"), call())
 
     def test_upload_set_default_generate_and_duplicate_flow(self) -> None:
-        self.assertEqual(self.tools.upload_format("Ref", str(FIXTURES / "YcKResume.docx")), "success")
-        self.assertEqual(self.tools.upload_format("Other", str(FIXTURES / "YcKResumeFTR2.docx")), "success")
+        self.assertEqual(self.tools.upload_format("Ref", str(FIXTURES / "ycksample.docx")), "success")
+        self.assertEqual(self.tools.upload_format("Other", str(FIXTURES / "rama.docx")), "success")
         self.assertTrue(self.tools.upload_format("Bad", "/no/such/file.docx").startswith("failure: file not found"))
         listed = json.loads(self.tools.list_formats())
         self.assertEqual([(f["name"], f["default"]) for f in listed], [("Ref", True), ("Other", False)])
@@ -81,7 +81,7 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual((status["user"], status["default_format"]), ("alice", "Ref"))
 
     def test_server_down_is_reported_as_failure(self) -> None:
-        self.tools.upload_format("Ref", str(FIXTURES / "YcKResume.docx"))
+        self.tools.upload_format("Ref", str(FIXTURES / "ycksample.docx"))
         self.world.http.down = True
         try:
             tools = ResumeTools(lambda: self.world.client())

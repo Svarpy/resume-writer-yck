@@ -9,7 +9,6 @@ _ROOT = _Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import re
 import tempfile
 import unittest
 from datetime import date
@@ -20,9 +19,6 @@ _TEST_ROOT = tempfile.mkdtemp(prefix="rw-v4-settings-")
 from docx import Document  # noqa: E402
 
 from resume_core.render import (  # noqa: E402
-    ResumeContent,
-    ResumeFormat,
-    SectionSpec,
     build_output_filename,
     find_duplicate_files,
     split_keywords,
@@ -171,115 +167,6 @@ class OutputHelperTests(unittest.TestCase):
         self.assertEqual(split_keywords("a, b\nc; d, e, f"), ["a", "b", "c", "d", "e"])
         self.assertEqual(split_keywords("a, b, c", limit=2), ["a", "b"])
         self.assertEqual(split_keywords("a, b, c", limit=0), [])
-
-
-FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "formats"
-YCK_RESUME = FIXTURE_DIR / "YcKResume.docx"
-
-
-class DynamicRenderTests(unittest.TestCase):
-    """Section plans rendered through an uploaded sample (YcKResume: Title Case headings, separators, tabbed rows)."""
-
-    def _build(self, content: ResumeContent) -> Path:
-        from resume_core.render.template import build_resume_from_template
-
-        out = Path(tempfile.mkdtemp(dir=_TEST_ROOT)) / "out.docx"
-        build_resume_from_template(content, ResumeFormat(template_path=YCK_RESUME), out)
-        return out
-
-    def test_custom_section_order_headings_and_hidden_sections(self) -> None:
-        plan = (
-            SectionSpec("projects", "Projects", "bullets", heading="SELECTED PROJECTS"),
-            SectionSpec("summary", "Summary", "paragraph"),
-            SectionSpec("empty_one", "Nothing Here", "bullets"),
-        )
-        content = ResumeContent(
-            name="Ada Lovelace", email="ada@example.com", phone="", location="London",
-            sections={"projects": "- Analytical Engine notes", "summary": "Mathematician.", "hidden": "SHOULD NOT APPEAR"},
-            section_plan=plan,
-        )
-        texts = _paragraph_texts(self._build(content))
-        self.assertEqual(texts[0], "Ada Lovelace")
-        self.assertEqual(texts[1], "ada@example.com  |  London")  # blank phone leaves no dangling separator
-        self.assertLess(texts.index("SELECTED PROJECTS"), texts.index("Summary"))
-        self.assertTrue(any("Analytical Engine notes" in t for t in texts))
-        self.assertNotIn("SHOULD NOT APPEAR", "\n".join(texts))
-        self.assertNotIn("Nothing Here", "\n".join(texts))  # empty sections are skipped entirely
-        self.assertNotIn("Yashashchandra", "\n".join(texts))
-
-    def test_blank_name_is_dropped(self) -> None:
-        content = ResumeContent(name="", email="", phone="+1 555 0100", location="", sections={"s": "x"},
-                                section_plan=(SectionSpec("s", "S", "paragraph"),))
-        texts = _paragraph_texts(self._build(content))
-        self.assertEqual(texts[0], "+1 555 0100")
-
-    def test_known_companies_fill_missing_dates_from_settings(self) -> None:
-        companies = ({
-            "name": "Acme", "aliases": ["acme corp"], "default_date": "May 2020 – Present",
-            "role_dates": ["January 2022 – Present", "May 2020 – December 2021"],
-        },)
-        content = ResumeContent(
-            name="A", email="", phone="", location="",
-            sections={"experience": "Acme Corp | Remote\nSenior Engineer\nBuilt things.\nEngineer\nBuilt more things."},
-            section_plan=(SectionSpec("experience", "Experience", "experience", heading="WORK"),),
-            known_companies=companies,
-        )
-        texts = _paragraph_texts(self._build(content))
-        self.assertIn("Acme Corp  |  Remote\tMay 2020 – Present", texts)
-        self.assertIn("Senior Engineer\tJanuary 2022 – Present", texts)
-        self.assertIn("Engineer\tMay 2020 – December 2021", texts)
-
-    def test_without_known_companies_undated_lines_become_bullets(self) -> None:
-        content = ResumeContent(
-            name="A", email="", phone="", location="",
-            sections={"experience": "Acme Corp | Remote\nSenior Engineer"},
-            section_plan=(SectionSpec("experience", "Experience", "experience"),),
-        )
-        texts = _paragraph_texts(self._build(content))
-        self.assertFalse([t for t in texts if "\t" in t and re.search(r"\d{4}", t)])
-        self.assertIn("•\tAcme Corp | Remote", texts)
-
-    def test_metadata_settings_are_applied(self) -> None:
-        content = ResumeContent(
-            name="Ada Lovelace", email="", phone="", location="",
-            sections={"summary": "x", "kw": "a, b, c, d"},
-            section_plan=(SectionSpec("summary", "Summary", "paragraph"),),
-            keywords_text="a, b, c, d", author="A. Lovelace", subject="CV", title_template="{name} - CV",
-            keyword_count=3,
-        )
-        core = Document(str(self._build(content))).core_properties
-        self.assertEqual(core.author, "A. Lovelace")
-        self.assertEqual(core.subject, "CV")
-        self.assertEqual(core.title, "Ada Lovelace - CV")
-        self.assertEqual(core.keywords, "a, b, c")
-
-    def test_legacy_content_renders_the_samples_own_sections(self) -> None:
-        content = ResumeContent(
-            name="Ada", email="a@example.com", phone="", location="", summary="Hello.",
-            skills="Python: yes", experience="Acme | Remote January 2024 - Present\nBuilt it.",
-            certifications="", top_skills="x, y", education_entries=("State U\tMay 2018 – May 2022",),
-        )
-        texts = _paragraph_texts(self._build(content))
-        for heading in ("Summary", "Skills", "Professional Experience", "Education"):
-            self.assertIn(heading, texts)
-
-    def test_font_and_size_choices_are_applied(self) -> None:
-        from resume_core.render.template import build_resume_from_template
-
-        content = ResumeContent(name="Ada", email="", phone="", location="", summary="Hello.",
-                                section_plan=(SectionSpec("summary", "Summary", "paragraph"),))
-        same = Path(tempfile.mkdtemp(dir=_TEST_ROOT)) / "same.docx"
-        build_resume_from_template(content, ResumeFormat(template_path=YCK_RESUME, font_name="Arial",
-                                                         name_size=16, heading_size=12, body_size=11), same)
-        changed = Path(tempfile.mkdtemp(dir=_TEST_ROOT)) / "changed.docx"
-        build_resume_from_template(content, ResumeFormat(template_path=YCK_RESUME, font_name="Georgia",
-                                                         name_size=20, heading_size=12, body_size=11), changed)
-        sizes = lambda path: [r.font.size.pt for r in Document(str(path)).paragraphs[0].runs if r.font.size]  # noqa: E731
-        fonts = lambda path: {r.font.name for p in Document(str(path)).paragraphs for r in p.runs if r.text.strip()}  # noqa: E731
-        self.assertEqual(sizes(same), [16.0])
-        self.assertEqual(sizes(changed), [20.0])
-        self.assertEqual(fonts(same), {"Arial"})
-        self.assertEqual(fonts(changed), {"Georgia"})
 
 
 if __name__ == "__main__":

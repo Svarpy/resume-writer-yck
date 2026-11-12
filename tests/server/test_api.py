@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from resume_server.api import create_app
 from resume_server.config import ServerConfig
 
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "formats"
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "templates"
 CONFIG = ServerConfig(mongodb_uri="mongomock://", jwt_secret="x" * 40, max_upload_mb=2)
 
 
@@ -36,7 +36,7 @@ def auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def upload(client: TestClient, token: str, name: str, fixture: str = "YcKResume.docx"):
+def upload(client: TestClient, token: str, name: str, fixture: str = "ycksample.docx"):
     data = (FIXTURES / fixture).read_bytes()
     return client.post("/api/v1/formats", headers=auth(token), data={"name": name}, files={"file": (fixture, data)})
 
@@ -128,6 +128,24 @@ class AuthApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = make_client()
 
+    def test_a_login_token_can_be_renewed_but_an_access_token_cannot(self) -> None:
+        token = signup(self.client, display_name="Alice A")["token"]
+        renewed = self.client.post("/api/v1/auth/refresh", headers=auth(token))
+        self.assertEqual(renewed.status_code, 200, renewed.text)
+        self.assertEqual(renewed.json()["profile"]["username"], "alice")
+        self.assertEqual(self.client.get("/api/v1/profile", headers=auth(renewed.json()["token"])).status_code, 200)
+        pat = self.client.post("/api/v1/tokens", headers=auth(token), json={"name": "mcp"}).json()["token"]
+        self.assertEqual(self.client.post("/api/v1/auth/refresh", headers=auth(pat)).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/refresh").status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/refresh", headers=auth("garbage")).status_code, 401)
+
+    def test_login_tokens_last_a_year_by_default(self) -> None:
+        import jwt
+
+        token = signup(self.client)["token"]
+        payload = jwt.decode(token, options={"verify_signature": False})
+        self.assertGreater(payload["exp"] - payload["iat"], 300 * 24 * 3600)
+
     def test_signup_login_profile_and_password_rules(self) -> None:
         created = signup(self.client, display_name="Alice A", email="a@example.com")
         self.assertEqual(created["profile"]["username"], "alice")
@@ -193,7 +211,7 @@ class FormatApiTests(unittest.TestCase):
     def test_first_upload_is_default_and_default_can_change(self) -> None:
         self.assertEqual(self.client.get("/api/v1/formats/default", headers=auth(self.token)).json(), {})
         first = upload(self.client, self.token, "First").json()
-        second = upload(self.client, self.token, "Second", "YcKResumeFTR2.docx").json()
+        second = upload(self.client, self.token, "Second", "rama.docx").json()
         self.assertTrue(first["is_default"])
         self.assertFalse(second["is_default"])
         self.assertEqual([s["key"] for s in first["sections"]], ["summary", "skills", "experience", "education"])
@@ -208,32 +226,81 @@ class FormatApiTests(unittest.TestCase):
 
     def test_delete_promotes_next_and_last_delete_leaves_none(self) -> None:
         first = upload(self.client, self.token, "First").json()
-        second = upload(self.client, self.token, "Second", "YcKResumeFTR2.docx").json()
+        second = upload(self.client, self.token, "Second", "rama.docx").json()
         self.assertEqual(self.client.delete(f"/api/v1/formats/{first['id']}", headers=auth(self.token)).status_code, 204)
         self.assertEqual(self.client.get("/api/v1/formats/default", headers=auth(self.token)).json()["id"], second["id"])
         self.client.delete(f"/api/v1/formats/{second['id']}", headers=auth(self.token))
         self.assertEqual(self.client.get("/api/v1/formats/default", headers=auth(self.token)).json(), {})
         self.assertEqual(self.client.get(f"/api/v1/formats/{second['id']}", headers=auth(self.token)).status_code, 404)
 
-    def test_sample_download_roundtrip_and_upload_validation(self) -> None:
+    def test_template_download_roundtrip_and_upload_validation(self) -> None:
         fmt = upload(self.client, self.token, "Ref").json()
-        sample = self.client.get(f"/api/v1/formats/{fmt['id']}/sample", headers=auth(self.token))
-        self.assertTrue(fmt["sanitized"])
-        self.assertNotEqual(sample.content, (FIXTURES / "YcKResume.docx").read_bytes())  # personal text removed...
-        self.assertNotIn(b"Yashashchandra", sample.content)
-        from resume_core.formats import analyze_sample
+        template = self.client.get(f"/api/v1/formats/{fmt['id']}/file", headers=auth(self.token))
+        self.assertEqual(template.content, (FIXTURES / "ycksample.docx").read_bytes())  # stored as uploaded
+        self.assertEqual([s["key"] for s in fmt["sections"]], ["summary", "skills", "experience", "education"])
+        self.assertIn("experience > jobs(company, location, dates) > roles(title, dates) > bullets(text)",
+                      fmt["outline"])
+        from resume_core.formats import analyze_template
 
-        self.assertEqual(analyze_sample(sample.content)[0]["sections"], fmt["sections"])  # ...same format
-        self.assertTrue(sample.content.startswith(b"PK"))
+        self.assertEqual(analyze_template(template.content)[0]["sections"], fmt["sections"])
         bad = self.client.post("/api/v1/formats", headers=auth(self.token), data={"name": "Bad"},
                                files={"file": ("x.docx", b"not a word document")})
         self.assertEqual(bad.status_code, 422)
         blank = self.client.post("/api/v1/formats", headers=auth(self.token), data={"name": "  "},
-                                 files={"file": ("x.docx", (FIXTURES / "YcKResume.docx").read_bytes())})
+                                 files={"file": ("x.docx", (FIXTURES / "ycksample.docx").read_bytes())})
         self.assertEqual(blank.status_code, 422)
         huge = self.client.post("/api/v1/formats", headers=auth(self.token), data={"name": "Huge"},
                                 files={"file": ("x.docx", b"PK" + b"0" * (3 * 1024 * 1024))})
         self.assertEqual(huge.status_code, 422)
+
+    def test_a_document_without_placeholders_is_rejected_with_every_problem(self) -> None:
+        import io
+
+        from docx import Document
+
+        document = Document()
+        for text in ("Jane Roe", "SUMMARY", "Some text"):
+            document.add_paragraph(text)
+        buffer = io.BytesIO()
+        document.save(buffer)
+        plain = self.client.post("/api/v1/formats", headers=auth(self.token), data={"name": "Plain"},
+                                 files={"file": ("x.docx", buffer.getvalue())})
+        self.assertEqual(plain.status_code, 422)
+        self.assertIn("placeholders", plain.json()["detail"])
+        self.assertEqual(self.client.get("/api/v1/formats", headers=auth(self.token)).json(), [])
+
+    def test_replace_keeps_the_entry_and_its_settings(self) -> None:
+        first = upload(self.client, self.token, "First").json()
+        second = upload(self.client, self.token, "Second", "rama.docx").json()
+        rows = self.client.get("/api/v1/settings", headers=auth(self.token),
+                               params={"format_id": second["id"]}).json()["values"]["sections.items"]
+        rows[2]["label"] = "My Skills"
+        self.client.patch("/api/v1/settings", headers=auth(self.token),
+                          json={"format_id": second["id"], "changes": {"sections.items": rows}})
+        before = self.client.get("/api/v1/state", headers=auth(self.token)).json()
+        replaced = self.client.put(f"/api/v1/formats/{second['id']}/file", headers=auth(self.token),
+                                   files={"file": ("x.docx", (FIXTURES / "vitesh.docx").read_bytes())})
+        self.assertEqual(replaced.status_code, 200, replaced.text)
+        body = replaced.json()
+        self.assertEqual((body["id"], body["name"], body["is_default"], body["rev"]),
+                         (second["id"], "Second", False, second["rev"] + 1))
+        self.assertIn("PROFESSIONAL SUMMARY", [s["heading"] for s in body["sections"]])
+        after = self.client.get("/api/v1/formats", headers=auth(self.token)).json()
+        self.assertEqual([f["id"] for f in after], [first["id"], second["id"]])      # no new entry
+        file = self.client.get(f"/api/v1/formats/{second['id']}/file", headers=auth(self.token)).content
+        self.assertEqual(file, (FIXTURES / "vitesh.docx").read_bytes())
+        view = self.client.get("/api/v1/settings", headers=auth(self.token), params={"format_id": second["id"]}).json()
+        sections = {r["key"]: r for r in view["values"]["sections.items"]}
+        self.assertEqual(sections["skills"]["label"], "My Skills")                   # the user's choice survives
+        self.assertEqual(sections["summary"]["heading"], "PROFESSIONAL SUMMARY")       # headings follow the new file
+        state = self.client.get("/api/v1/state", headers=auth(self.token)).json()
+        self.assertGreater(state["formats_rev"], before["formats_rev"])
+        self.assertGreater(state["format_settings_rev"], before["format_settings_rev"]) if state["default_format_id"] == second["id"] else None
+        bad = self.client.put(f"/api/v1/formats/{second['id']}/file", headers=auth(self.token),
+                              files={"file": ("x.docx", b"nope")})
+        self.assertEqual(bad.status_code, 422)
+        self.assertEqual(self.client.put("/api/v1/formats/missing/file", headers=auth(self.token),
+                                         files={"file": ("x.docx", b"x")}).status_code, 404)
 
 
 class BackupApiTests(unittest.TestCase):
@@ -244,7 +311,7 @@ class BackupApiTests(unittest.TestCase):
         self.alice = signup(self.client, "alice")["token"]
         self.make_admin("boss")  # done by hand in the database, as in real use
         upload(self.client, self.alice, "Alice Format")
-        upload(self.client, self.boss, "Boss Format", "YcKResumeFTR2.docx")
+        upload(self.client, self.boss, "Boss Format", "rama.docx")
         self.client.patch("/api/v1/settings", headers=auth(self.alice), json={"changes": {"personal.phone": "ALICE-PHONE"}})
 
     def make_admin(self, username: str, role: str = "admin") -> None:
@@ -329,21 +396,6 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual({c["name"]: c["documents"] for c in info["collections"]}["users"], 2)
 
 
-class SanitizeFallbackTests(unittest.TestCase):
-    def test_original_is_kept_with_a_warning_when_sanitising_is_not_possible(self) -> None:
-        from unittest import mock
-
-        client = make_client()
-        token = signup(client)["token"]
-        original = (FIXTURES / "YcKResume.docx").read_bytes()
-        with mock.patch("resume_server.services.formats.sanitize_sample", return_value=(original, False)):
-            fmt = upload(client, token, "Ref").json()
-        self.assertFalse(fmt["sanitized"])
-        self.assertTrue(any("could not be removed" in w for w in fmt["warnings"]))
-        sample = client.get(f"/api/v1/formats/{fmt['id']}/sample", headers=auth(token)).content
-        self.assertEqual(sample, original)  # the upload still works and the format is unchanged
-
-
 class SettingsApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = make_client()
@@ -396,12 +448,13 @@ class SettingsApiTests(unittest.TestCase):
 
     def test_format_settings_follow_the_format_and_are_separate(self) -> None:
         one = upload(self.client, self.token, "One").json()
-        two = upload(self.client, self.token, "Two", "YcKResumeFTR2.docx").json()
+        two = upload(self.client, self.token, "Two", "rama.docx").json()
         view_one, view_two = self.get(one["id"]), self.get(two["id"])
         headings = lambda v: [r["heading"] for r in v["values"]["sections.items"]]  # noqa: E731
-        self.assertIn("Professional Experience", headings(view_one))
-        self.assertIn("WORK EXPERIENCE", headings(view_two))
-        self.assertIn(24, view_two["values"]["fonts.name_size_choices"])
+        self.assertIn("WORK EXPERIENCE", headings(view_one))
+        self.assertEqual(headings(view_one)[0], "SUMMARY")
+        self.assertIn("TECHNICAL SKILLS", headings(view_two))
+        self.assertEqual(headings(view_two)[0], "")           # that template's summary has no heading
         # format-scoped settings need a format; user-wide ones do not
         self.assertEqual(self.patch({"sections.items": []}).status_code, 422)
         rows = view_one["values"]["sections.items"]

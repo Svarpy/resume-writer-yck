@@ -17,7 +17,7 @@ import httpx
 
 from resume_client.cache import DiskCache
 from resume_client.config import ClientConfig
-from resume_client.errors import AuthRequired, ClientError
+from resume_client.errors import ApiError, AuthRequired, ClientError, ServerUnavailable
 from resume_client.http import ApiHttp
 from resume_core.backup import backup_basename
 from resume_core.settings import Settings
@@ -57,19 +57,68 @@ class ResumeClient:
     def signed_in(self) -> bool:
         return bool(self.token and self.username)
 
-    def _start_session(self, token: str, profile: dict[str, Any]) -> dict[str, Any]:
+    def _start_session(self, token: str, profile: dict[str, Any], *, remember: bool = False) -> dict[str, Any]:
         self.token, self.profile_data, self.username = token, profile, profile["username"]
         self._cache = DiskCache(self.config.root, self.config.api_url, self.username, self.config.cache_ttl)
+        if remember:
+            self._remember_session()
         return profile
+
+    # -- staying signed in ----------------------------------------------------------------------
+    @property
+    def _session_path(self) -> Path:
+        return self.config.root / "session.json"
+
+    def _remember_session(self) -> None:
+        """Keep the login token on this computer (owner-only file) so the next start is already signed in."""
+        payload = {"api_url": self.config.api_url, "token": self.token, "profile": self.profile_data}
+        try:
+            path = self._session_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_name(path.name + ".tmp")
+            temp.write_text(json.dumps(payload), encoding="utf-8")
+            temp.chmod(0o600)
+            temp.replace(path)
+        except OSError:
+            pass  # not being able to remember only means signing in again next time
+
+    def _forget_session(self) -> None:
+        try:
+            self._session_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def restore_session(self) -> bool:
+        """Sign in again from the remembered login. Only a rejected token (revoked, expired, a different
+        server) signs the user out; if the server cannot be reached the remembered account is used offline."""
+        try:
+            saved = json.loads(self._session_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(saved, dict) or saved.get("api_url") != self.config.api_url or not saved.get("token") \
+                or not (saved.get("profile") or {}).get("username"):
+            return False
+        self.token = saved["token"]
+        try:
+            data = self._api.json("POST", "/auth/refresh")
+        except AuthRequired:                     # the server says this login is no longer valid
+            self.token = ""
+            self._forget_session()
+            return False
+        except (ServerUnavailable, ApiError):    # unreachable or misbehaving: stay signed in, work from the cache
+            self._start_session(saved["token"], saved["profile"])
+            return True
+        self._start_session(data["token"], data["profile"], remember=True)
+        return True
 
     def login(self, username: str, password: str) -> dict[str, Any]:
         data = self._api.json("POST", "/auth/login", json={"username": username, "password": password})
-        return self._start_session(data["token"], data["profile"])
+        return self._start_session(data["token"], data["profile"], remember=True)
 
     def signup(self, username: str, password: str, display_name: str = "", email: str = "") -> dict[str, Any]:
         data = self._api.json("POST", "/auth/signup", json={
             "username": username, "password": password, "display_name": display_name, "email": email})
-        return self._start_session(data["token"], data["profile"])
+        return self._start_session(data["token"], data["profile"], remember=True)
 
     def use_access_token(self, token: str = "") -> dict[str, Any]:
         """Sign in with a personal access token (the MCP server). The username is remembered locally."""
@@ -95,6 +144,7 @@ class ResumeClient:
         return self._start_session(self.token, profile)
 
     def logout(self) -> None:
+        self._forget_session()
         self.token, self.username, self.profile_data, self._cache = "", "", {}, None
 
     @property
@@ -178,6 +228,19 @@ class ResumeClient:
         self.refresh()
         return info
 
+    def replace_format(self, format_id: str, path: Path) -> dict[str, Any]:
+        """Replace a format's template document in place (same entry, id and settings)."""
+        path = Path(path)
+        info = self._api.json("PUT", f"/formats/{format_id}/file", files={"file": (path.name, path.read_bytes())})
+        self.refresh()
+        return info
+
+    def download_format(self, format_id: str, destination: Path) -> Path:
+        """Save a format's template document (the ``.docx`` with placeholders) to ``destination``."""
+        destination = Path(destination)
+        destination.write_bytes(self._api.bytes(f"/formats/{format_id}/file"))
+        return destination
+
     def delete_format(self, format_id: str) -> None:
         self._api.request("DELETE", f"/formats/{format_id}")
         self.refresh()
@@ -203,15 +266,15 @@ class ResumeClient:
         return info
 
     def sample_path(self, format_id: str = "") -> Path:
-        """Local copy of a format's sample document (downloaded once per revision)."""
+        """Local copy of a format's template document (downloaded once per revision)."""
         info = self.default_format() if not format_id else self._api.json("GET", f"/formats/{format_id}")
         if not info:
             from resume_client.errors import NoFormatError
 
-            raise NoFormatError("No resume format yet. Upload a sample document first.")
+            raise NoFormatError("No resume format yet. Upload a template document first.")
         path = self.cache.sample_path(info["id"], info["rev"])
         if not path.is_file():
-            path = self.cache.store_sample(info["id"], info["rev"], self._api.bytes(f"/formats/{info['id']}/sample"))
+            path = self.cache.store_sample(info["id"], info["rev"], self._api.bytes(f"/formats/{info['id']}/file"))
         return path
 
     # ------------------------------------------------------------------ settings

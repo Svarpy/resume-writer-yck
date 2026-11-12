@@ -59,6 +59,15 @@ class AuthService:
         token = security.create_login_token(key, self.config.jwt_secret, self.config.jwt_expire_hours)
         return token, public_profile(doc)
 
+    def refresh(self, login_token: str) -> tuple[str, dict[str, Any]]:
+        """A fresh login token for the owner of a still valid *login* token (access tokens cannot be refreshed)."""
+        username = security.read_login_token(login_token, self.config.jwt_secret)
+        doc = self.users.get(username)
+        if doc is None:
+            raise UnauthorizedError("Invalid or expired login token")
+        token = security.create_login_token(username, self.config.jwt_secret, self.config.jwt_expire_hours)
+        return token, public_profile(doc)
+
     def profile(self, username: str) -> dict[str, Any]:
         doc = self.users.get(username)
         if doc is None:

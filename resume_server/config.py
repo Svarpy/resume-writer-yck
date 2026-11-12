@@ -21,7 +21,7 @@ class ServerConfig:
     mongodb_uri: str
     mongodb_db: str = "resume-writer"
     jwt_secret: str = ""
-    jwt_expire_hours: int = 168
+    jwt_expire_hours: int = 8760
     api_host: str = "127.0.0.1"
     api_port: int = 8765
     max_upload_mb: int = 10
@@ -46,7 +46,7 @@ def load_config(env_file: Optional[str] = None) -> ServerConfig:
         mongodb_uri=uri,
         mongodb_db=os.environ.get("MONGODB_DB", "resume-writer").strip() or "resume-writer",
         jwt_secret=secret,
-        jwt_expire_hours=int(os.environ.get("JWT_EXPIRE_HOURS", "168")),
+        jwt_expire_hours=int(os.environ.get("JWT_EXPIRE_HOURS", "8760")),
         api_host=os.environ.get("API_HOST", "127.0.0.1"),
         api_port=int(os.environ.get("API_PORT", "8765")),
         max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", "10")),

@@ -17,13 +17,21 @@ from pathlib import Path
 
 os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 
+import tkinter as tk
+
 from docx import Document
 
 from resume_core.render import build_output_filename
 from tests.support import FIXTURES, World
 
-YCK_RESUME = FIXTURES / "YcKResume.docx"
+YCK_RESUME = FIXTURES / "ycksample.docx"
 SUMMARY_45 = " ".join(f"word{i}" for i in range(1, 46))
+
+
+def _all_widgets(root):
+    for child in root.winfo_children():
+        yield child
+        yield from _all_widgets(child)
 
 
 def _pump(app, times: int = 15) -> None:
@@ -114,12 +122,60 @@ class WriterAndSettingsTests(GuiCase):
 
     def test_font_choices_come_from_settings(self) -> None:
         self.app.settings.set("fonts.font_choices", ["Arial", "Fira Sans"])
-        self.app.settings.set("fonts.body_size_choices", [9, 11])
+        self.app.settings.set("fonts.body_size_choices", [9, 10])
         _pump(self.app)
         menus = [w for w in self.app._widgets_by_role.get("menu", []) if self.app._widget_alive(w)]
         labels = [[m.entrycget(i, "label") for i in range(m.index("end") + 1)] for m in menus if m.index("end") is not None]
         self.assertIn(["Arial", "Fira Sans"], labels)
-        self.assertIn(["9", "11"], labels)
+        self.assertIn(["9", "10"], labels)
+
+    def test_education_entries_are_checkboxes_on_the_writer_page(self) -> None:
+        entries = [
+            {"label": "MSc", "enabled": True, "text": "Master of Science\tMay 2026\nOld University"},
+            {"label": "", "enabled": False, "text": "BSc Physics\tMay 2024\nOther College"},
+            {"label": "Diploma", "enabled": True, "text": "Diploma in Art"},
+        ]
+        self.app.deiconify()
+        self.app.settings.set("education.entries", entries)
+        _pump(self.app)
+
+        def boxes():
+            return {w.choice_text: w for w in _all_widgets(self.app.education_box) if hasattr(w, "choice_text")}
+
+        self.assertEqual(list(boxes()), ["MSc", "BSc Physics", "Diploma"])      # label, else the first line
+        self.assertEqual([boxes()[k].choice_var.get() for k in boxes()], [True, False, True])
+        self.assertFalse([w for w in _all_widgets(self.app.education_box) if isinstance(w, tk.Text)])   # no editing here
+        # ticking changes the setting (and nothing else about the entry)
+        def click(title: str) -> None:
+            boxes()[title].event_generate("<Button-1>", x=1, y=1)
+            _pump(self.app)
+
+        click("BSc Physics")
+        saved = self.app.settings.get("education.entries")
+        self.assertEqual([e["enabled"] for e in saved], [True, True, True])
+        self.assertEqual(saved[1]["text"], entries[1]["text"])
+        self.assertEqual(self.app.settings.education_entries(), [e["text"] for e in entries])
+        # none at all can be chosen: the resume is written without an education section
+        for title in ("MSc", "BSc Physics", "Diploma"):
+            click(title)
+        self.assertEqual(self.app.settings.education_entries(), [])
+        self.assertEqual([boxes()[k].choice_var.get() for k in boxes()], [False, False, False])
+        # a change made in Settings shows up on the Writer page
+        rows = self.app.settings.get("education.entries")
+        rows[0]["enabled"] = True
+        self.app.settings.set("education.entries", rows)
+        _pump(self.app)
+        self.assertTrue(boxes()["MSc"].choice_var.get())
+
+    def test_the_education_box_follows_the_formats_education_section(self) -> None:
+        self.assertTrue(self.app.education_box.winfo_manager())
+        rows = self.app.settings.get("sections.items")
+        for row in rows:
+            if row["kind"] == "education":
+                row["enabled"] = False
+        self.app.settings.set("sections.items", rows)
+        _pump(self.app)
+        self.assertFalse(self.app.education_box.winfo_manager())
 
     def test_required_fields_and_word_limits_are_configurable(self) -> None:
         self._fill()
@@ -188,7 +244,7 @@ class WriterAndSettingsTests(GuiCase):
         texts = [p.text for p in document.paragraphs if p.text.strip()]
         table_texts = [c.text for tb in document.tables for r in tb.rows for c in r.cells]
         self.assertEqual(texts[0], "Ada Lovelace")
-        self.assertIn("Education", texts)
+        self.assertIn("EDUCATION", texts)
         self.assertTrue(any("University of London" in t for t in texts + table_texts))
         self.assertNotIn("Should Not Appear", texts + table_texts)
         self.assertEqual(self.app.section_texts["summary"].get("1.0", "end").strip(), "")
@@ -303,28 +359,22 @@ class WriterAndSettingsTests(GuiCase):
         _pump(self.app)
         self.assertEqual(self.app.settings.get("appearance.accent_color"), "#010203")
 
-    def test_advanced_settings_hidden_until_toggled(self) -> None:
+    def test_every_setting_is_shown_without_an_advanced_toggle(self) -> None:
         page = self.app.settings_page
+        self.assertFalse(hasattr(page, "advanced_button"))
         page._select_category("Duplicate Check")
         _pump(self.app)
-        self.assertNotIn("duplicate_check.extensions", page._rows)
-        self.assertIn("duplicate_check.enabled", page._rows)
-        page._toggle_advanced()
+        for key in ("duplicate_check.enabled", "duplicate_check.extensions", "duplicate_check.case_sensitive"):
+            self.assertIn(key, page._rows)
+        page._select_category("Appearance")
         _pump(self.app)
-        self.assertIn("duplicate_check.extensions", page._rows)
-        page._toggle_advanced()
-        page.search_var.set("file types")  # search finds advanced settings regardless
+        self.assertIn("appearance.sidebar_mode", page._rows)
+        page._select_category("Resume Sections")
         _pump(self.app)
-        self.assertIn("duplicate_check.extensions", page._rows)
-
-    def test_wheel_scrolls_from_anywhere_while_settings_visible(self) -> None:
-        page = self.app.settings_page
-        self.app.shell.navigate("settings")
-        _pump(self.app)
-        self.assertTrue(page._active)
-        self.app.shell.navigate("writer")
-        _pump(self.app)
-        self.assertFalse(page._active)
+        shown = [w.cget("text") for w in _all_widgets(page.inner) if isinstance(w, tk.Label)]
+        shown += [getattr(w, "choice_text", "") for w in _all_widgets(page.inner)]
+        for field in ("Key", "Width", "Show heading"):          # used to be hidden behind "Show Advanced"
+            self.assertIn(field, shown)
 
     def test_settings_page_edit_and_reset_flow(self) -> None:
         page = self.app.settings_page
@@ -651,6 +701,7 @@ class LoginTests(GuiCase):
     with_format = False
 
     def signed_out_app(self):
+        self.client.logout()          # forgets the session the fixture's sign-up remembered
         client = self.world.client()
         return self.make_app(client), client
 
@@ -767,14 +818,14 @@ class FormatterFlowTests(GuiCase):
         self.assertIn("summary", self.app.section_texts)
         self.assertEqual(self.app.current_format_name(), "My Format")
 
-        second = self.client.add_format("Second", FIXTURES / "YcKResumeFTR2.docx")
+        second = self.client.add_format("Second", FIXTURES / "vitesh.docx")
         page.refresh()
         with mock.patch.object(messagebox, "showinfo"):
             page._make_default(second)
         _pump(self.app)
         self.assertEqual(self.client.default_format()["id"], second["id"])
         self.assertIn("PROFESSIONAL SUMMARY", [r["heading"] for r in self.app.settings.get("sections.items")])
-        self.assertEqual(self.app.name_size_var.get(), "24")  # typography follows the new default
+        self.assertEqual(self.app.name_size_var.get(), "18")  # typography follows the new default
 
         with mock.patch.object(messagebox, "askyesno", return_value=True):
             page._delete_format(second)
@@ -787,6 +838,81 @@ class FormatterFlowTests(GuiCase):
         self.assertFalse(self.app._has_format)
         self.assertEqual(self.app._format_id, "")
 
+    def test_replace_download_and_prompt(self) -> None:
+        from tkinter import messagebox
+        from unittest import mock
+
+        page = self.app.formatter_page
+        spec = self.client.add_format("Ref", YCK_RESUME)
+        page.refresh()
+        with mock.patch("tkinter.filedialog.askopenfilename", return_value=str(FIXTURES / "vitesh.docx")), \
+                mock.patch.object(messagebox, "showinfo"):
+            page._replace_format(spec)
+        _pump(self.app)
+        listed = self.client.list_formats()
+        self.assertEqual([(f["id"], f["name"]) for f in listed], [(spec["id"], "Ref")])   # same entry
+        self.assertEqual(listed[0]["rev"], spec["rev"] + 1)
+        self.assertIn("PROFESSIONAL SUMMARY", [r["heading"] for r in self.app.settings.get("sections.items")])
+
+        target = self.out_dir / "downloaded.docx"
+        with mock.patch("tkinter.filedialog.asksaveasfilename", return_value=str(target)), \
+                mock.patch.object(messagebox, "showinfo"):
+            page._download_format(listed[0])
+        self.assertEqual(target.read_bytes(), (FIXTURES / "vitesh.docx").read_bytes())
+
+        with mock.patch.object(messagebox, "showinfo"):
+            page._copy_prompt()
+        from resume_core.placeholders.prompt import AI_PROMPT
+
+        self.assertEqual(page.clipboard_get(), AI_PROMPT)
+
+        with mock.patch("tkinter.filedialog.askopenfilename", return_value=str(self.out_dir / "missing.docx")), \
+                mock.patch.object(messagebox, "showerror") as err:
+            page._replace_format(listed[0])
+        err.assert_called_once()
+
+    def test_rows_show_name_and_font_and_hide_the_change_buttons_behind_modify(self) -> None:
+        from unittest import mock
+
+        page = self.app.formatter_page
+        spec = self.client.add_format("Ref", YCK_RESUME)
+        page.refresh()
+        _pump(self.app)
+
+        def texts():
+            return [w.cget("text") for w in _all_widgets(page.list_frame) if isinstance(w, tk.Label)]
+
+        def buttons():
+            return [w.cget("text") for w in _all_widgets(page.list_frame) if isinstance(w, tk.Label) and w.cget("cursor") == "hand2"]
+
+        shown = "\n".join(texts())
+        self.assertIn("Ref", shown)
+        self.assertIn("Font Arial", shown)
+        self.assertNotIn("Structure:", shown)                  # the structure is not listed in the row
+        self.assertNotIn("roles(", shown)
+        for needed in ("Structure", "Download", "Modify"):
+            self.assertIn(needed, buttons())
+        for hidden in ("Replace File", "Delete"):
+            self.assertNotIn(hidden, buttons())
+        page._toggle_modify(spec)
+        _pump(self.app)
+        for revealed in ("Replace File", "Delete"):
+            self.assertIn(revealed, buttons())
+        page._toggle_modify(spec)
+        _pump(self.app)
+        self.assertNotIn("Delete", buttons())
+
+        opened = []
+        with mock.patch.object(tk.Toplevel, "wait_window", lambda *a, **k: None):
+            page._show_structure(self.client.list_formats()[0])
+            _pump(self.app)
+            top = [w for w in page.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+            body = [w for w in _all_widgets(top) if isinstance(w, tk.Text)][0]
+            opened.append(body.get("1.0", "end"))
+            top.destroy()
+        self.assertIn("experience > jobs(company, location, dates) > roles(title, dates) > bullets(text)", opened[0])
+        self.assertIn("summary", opened[0])
+
     def test_empty_formatter_offers_no_built_in_format(self) -> None:
         page = self.app.formatter_page
         page.refresh()
@@ -796,23 +922,77 @@ class FormatterFlowTests(GuiCase):
 
 
 class ScrollTests(GuiCase):
-    def test_trackpad_and_wheel_scroll_from_any_widget_on_the_settings_page(self) -> None:
+    """The wheel and the trackpad scroll the visible page wherever the pointer is."""
+
+    def _scrolls(self, widget, canvas) -> None:
+        start = canvas.yview()[0]
+        widget.event_generate("<MouseWheel>", delta=-3, x=5, y=5)
+        _pump(self.app)
+        after_wheel = canvas.yview()[0]
+        self.assertGreater(after_wheel, start)
+        try:
+            widget.event_generate("<TouchpadScroll>", delta=((40) & 0xFFFF), x=5, y=5)   # two fingers the other way
+        except Exception:  # noqa: BLE001 - this Tk has no trackpad event
+            return
+        _pump(self.app)
+        self.assertLess(canvas.yview()[0], after_wheel)
+
+    def test_settings_page_scrolls_from_any_widget(self) -> None:
         self.app.deiconify()
         self.app.shell.navigate("settings")
         _pump(self.app)
         page = self.app.settings_page
         label = page.inner.winfo_children()[3]  # a label deep inside a card, not the scrollbar
-        start = page.canvas.yview()[0]
-        label.event_generate("<MouseWheel>", delta=-3, x=5, y=5)
+        self._scrolls(label, page.canvas)
+
+    def test_formatter_page_scrolls_from_any_widget(self) -> None:
+        self.app.deiconify()
+        for index in range(14):
+            self.client.add_format(f"Extra {index}", YCK_RESUME)
+        self.app.shell.navigate("formatter")
         _pump(self.app)
-        after_wheel = page.canvas.yview()[0]
-        self.assertGreater(after_wheel, start)
-        try:
-            label.event_generate("<TouchpadScroll>", delta=((-40) & 0xFFFF), x=5, y=5)
-        except Exception:  # noqa: BLE001 - this Tk has no trackpad event
-            self.skipTest("no <TouchpadScroll> in this Tk")
+        page = self.app.formatter_page
+        self.assertGreater(page.list_canvas.bbox("all")[3], page.list_canvas.winfo_height())
+        self._scrolls(page.primary_menu, page.list_canvas)      # pointer on a control outside the list
+
+    def test_profile_page_scrolls_from_any_widget(self) -> None:
+        self.app.deiconify()
+        for index in range(10):
+            self.client.create_token(f"token {index}")
+        self.app.shell.navigate("profile")
         _pump(self.app)
-        self.assertGreater(page.canvas.yview()[0], after_wheel)
+        page = self.app.profile_page
+        self.assertGreater(page.canvas.bbox("all")[3], page.canvas.winfo_height())
+        self._scrolls(page.body.winfo_children()[0], page.canvas)
+
+    def test_a_page_that_cannot_scroll_ignores_the_wheel(self) -> None:
+        self.app.deiconify()
+        self.app.shell.navigate("writer")
+        _pump(self.app)
+        self.app.settings_page.canvas.yview_moveto(0)
+        self.app.writer_page.event_generate("<MouseWheel>", delta=-3, x=5, y=5)
+        _pump(self.app)
+        self.assertEqual(self.app.settings_page.canvas.yview()[0], 0.0)     # the hidden page did not move
+
+
+class StaySignedInTests(GuiCase):
+    with_format = False
+
+    def test_a_restart_is_still_signed_in_until_sign_out_is_clicked(self) -> None:
+        for _ in range(3):                                   # close and open the app several times
+            self.app.destroy()
+            client = self.world.client()                     # a new process: nothing in memory
+            self.app = self.make_app(client)
+            _pump(self.app)
+            self.assertTrue(client.signed_in)
+            self.assertEqual(client.username, self.username)
+            self.assertTrue(self.app.shell_container.winfo_manager())          # the app, not the login page
+            self.assertFalse(self.app.auth_container.winfo_manager())
+        self.app._logout()
+        _pump(self.app)
+        restarted = self.make_app(self.world.client())
+        self.assertFalse(restarted.client.signed_in)
+        self.assertTrue(restarted.auth_container.winfo_manager())
 
 
 if __name__ == "__main__":

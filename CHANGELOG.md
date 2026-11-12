@@ -6,6 +6,20 @@
 
 ## Unreleased
 
+### v5 (v5parsed)
+
+- **Scrolling** with the wheel or trackpad now works with the pointer anywhere on every page (Settings, Formatter, Profile); the Profile page scrolls too.
+- **Stays signed in** across restarts until Sign Out (login token in an owner-only `session.json`, renewed through the new `POST /api/v1/auth/refresh` on every start; login tokens now last a year by default; the server being unreachable does not sign you out).
+- **Formatter**: each format shows only its name and font details, with Make Default, **Structure** (a preview of sections and fields), Download and **Modify** (reveals Replace File and Delete).
+- **Writer**: an Education box with a checkbox per entry saved in Settings (none can be ticked); ticking changes the entry's *Include in resume* setting.
+- **Settings**: Show Advanced is gone; every setting and every field is always shown.
+
+- **Formats are now placeholder templates.** A format is a Word document with `{{placeholders}}` and `{{#blocks}}` instead of a sample resume the app had to interpret. Generation copies the template and fills it, so the output is the template's own layout; nothing is guessed from the look of a line any more. The OOXML sample parser, the sanitiser, the generator that cloned guessed exemplars and the 47-format corpus were removed.
+- Upload checks the template and lists every problem (unbalanced blocks, unknown fields, fields outside a block, markers split over runs are repaired). The Formatter shows each format's structure, and has **Download** and **Replace File** (same entry, id, default status and settings; the section list follows the new file) and **Copy AI Prompt**, a prompt that turns any sample resume into a template.
+- Fields the template does not contain are ignored; empty fields disappear with their separator or label; a section without content disappears with its heading and rule; table rows and paragraphs repeat per item (tables are split between rows where a block starts or ends). Email and phone become `mailto:`/`tel:` links; headings can still be renamed or hidden in Settings; the Writer's font and sizes are applied on top.
+- New API: `GET`/`PUT /api/v1/formats/{id}/file` (download / replace the template; replaces `/sample`). New client calls `replace_format` and `download_format`.
+- See [docs/format-templates.md](docs/format-templates.md) for the template syntax and the AI prompt.
+
 ### v4 (v4generic)
 
 - Removed the in-app updater completely (the weekly GitHub Releases check, the Install Now / Remind Later dialog, the Updates settings, `resume_gui/update/` and its tests). Releases are still built by CI; the app no longer checks for or installs them.

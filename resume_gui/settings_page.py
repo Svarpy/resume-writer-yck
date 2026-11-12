@@ -8,7 +8,6 @@ hand editing.
 
 from __future__ import annotations
 
-import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Any, Callable, Optional
@@ -39,8 +38,6 @@ class SettingsPage(tk.Frame):
         self._info_labels: dict[str, tk.Label] = {}
         self._category_buttons: dict[str, tk.Label] = {}
         self._building = False
-        self._active = False
-        self.show_advanced = False
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -61,11 +58,9 @@ class SettingsPage(tk.Frame):
         title.grid(row=0, column=0, sticky="w", padx=(0, 16))
         self.search_entry = app._entry(bar, self.search_var)
         self.search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
-        self.advanced_button = app._button(bar, "Show Advanced", self._toggle_advanced)
-        self.advanced_button.grid(row=0, column=2, padx=(0, 8))
         self.json_button = app._button(bar, "Edit settings.json", self._show_json_editor)
-        self.json_button.grid(row=0, column=3, padx=(0, 8))
-        app._button(bar, "Reset All", self._reset_all).grid(row=0, column=4)
+        self.json_button.grid(row=0, column=2, padx=(0, 8))
+        app._button(bar, "Reset All", self._reset_all).grid(row=0, column=3)
         self.hint_label = app._label(
             bar,
             "Type to search. Everything saves automatically as you type.",
@@ -135,48 +130,9 @@ class SettingsPage(tk.Frame):
         self.json_error.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.json_view.grid_remove()
 
-    def set_active(self, active: bool) -> None:
-        """Scroll with the wheel / trackpad anywhere on the page while it is the visible one."""
-        if active == self._active:
-            return
-        self._active = active
-        bindings = (
-            ("<MouseWheel>", self._on_wheel),            # mouse wheel (Windows, macOS)
-            ("<TouchpadScroll>", self._on_touchpad),     # trackpad two-finger scroll (Tk 9 on macOS)
-            ("<Button-4>", lambda _e: self._scroll_units(-1)),   # X11
-            ("<Button-5>", lambda _e: self._scroll_units(1)),
-        )
-        for sequence, handler in bindings:
-            try:
-                if active:
-                    self.bind_all(sequence, handler, add="+")
-                else:
-                    self.unbind_all(sequence)
-            except tk.TclError:
-                continue  # this Tk has no such event
-
-    def _scroll_units(self, amount: int) -> None:
-        if self._active and self.list_view.winfo_ismapped() and amount:
-            self.canvas.yview_scroll(amount, "units")
-
-    def _on_wheel(self, event) -> None:
-        delta = event.delta
-        if sys.platform != "darwin":
-            delta = int(delta / 120)
-        if delta:
-            self._scroll_units(-delta)
-
-    def _on_touchpad(self, event) -> None:
-        if not (self._active and self.list_view.winfo_ismapped()):
-            return
-        try:
-            _dx, dy = self.tk.call("tk::PreciseScrollDeltas", event.delta)
-        except tk.TclError:
-            return
-        box = self.canvas.bbox("all")
-        if dy and box and box[3] > box[1]:
-            # Canvases only scroll by units/pages, so move by a fraction of the content height.
-            self.canvas.yview_moveto(self.canvas.yview()[0] - float(dy) / (box[3] - box[1]))
+    def scroll_target(self):
+        """What the app-wide wheel/trackpad handler scrolls on this page."""
+        return self.json_text if self.json_view.winfo_ismapped() else self.canvas
 
     def _plain_text(self, parent, height: int) -> tk.Text:
         """A themed Text box that does not trigger Writer validation while typing."""
@@ -235,13 +191,6 @@ class SettingsPage(tk.Frame):
         self._show_list_view()
         self._rebuild_list()
 
-    def _toggle_advanced(self) -> None:
-        self.show_advanced = not self.show_advanced
-        self.advanced_button.configure(text="Hide Advanced" if self.show_advanced else "Show Advanced")
-        self.advanced_button.normal_text = self.advanced_button.cget("text")
-        self._show_list_view()
-        self._rebuild_list()
-
     def _show_list_view(self) -> None:
         self.json_view.grid_remove()
         self.list_view.grid()
@@ -253,7 +202,7 @@ class SettingsPage(tk.Frame):
     def _matching(self, definition: SettingDef) -> bool:
         terms = self.search_var.get().strip().casefold().split()
         if not terms:
-            return self.show_advanced or not definition.advanced
+            return True
         haystack = f"{definition.category} {definition.label} {definition.key} {definition.description}".casefold()
         return all(term in haystack for term in terms)
 
@@ -677,17 +626,13 @@ class _RecordsEditor(tk.Frame):
         widgets: dict[str, Any] = {}
         short = [f for f in self.definition.fields if f.kind in ("str", "int", "choice", "bool")]
         long = [f for f in self.definition.fields if f.kind in ("text", "lines")]
-        visible = [f for f in short if self.page.show_advanced or not f.advanced]
-        for field_def in short:
+        for position, field_def in enumerate(short):
             cell = app._track(tk.Frame(fields_frame, bg=app.c("panel_bg")), "panel_frame")
-            if field_def in visible:
-                position = visible.index(field_def)
-                cell.grid(row=position // FIELDS_PER_LINE, column=position % FIELDS_PER_LINE, sticky="w",
-                          padx=(0, 12), pady=(0, 4))
-            # Advanced fields keep their value but are not shown until "Show Advanced" is on.
+            cell.grid(row=position // FIELDS_PER_LINE, column=position % FIELDS_PER_LINE, sticky="w",
+                      padx=(0, 12), pady=(0, 4))
             widgets[field_def.key] = self._field_widget(cell, field_def, row.get(field_def.key, field_def.default))
         for offset, field_def in enumerate(long):
-            line = (len(visible) + FIELDS_PER_LINE - 1) // FIELDS_PER_LINE + offset
+            line = (len(short) + FIELDS_PER_LINE - 1) // FIELDS_PER_LINE + offset
             cell = app._track(tk.Frame(fields_frame, bg=app.c("panel_bg")), "panel_frame")
             cell.grid(row=line, column=0, columnspan=FIELDS_PER_LINE, sticky="ew", pady=(0, 4))
             cell.columnconfigure(0, weight=1)

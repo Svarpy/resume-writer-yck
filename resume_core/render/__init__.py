@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from resume_core.placeholders import TemplateError
 from resume_core.render.api import build_resume
 from resume_core.render.models import ResumeContent, ResumeFormat, SectionSpec
 from resume_core.render.parse import (
@@ -12,13 +13,12 @@ from resume_core.render.parse import (
     find_duplicate_files,
     split_keywords,
 )
-from resume_core.render.template import TemplateGenerationError
 
 __all__ = [
     "ResumeContent",
     "ResumeFormat",
     "SectionSpec",
-    "TemplateGenerationError",
+    "TemplateError",
     "build_output_filename",
     "build_resume",
     "count_words",
