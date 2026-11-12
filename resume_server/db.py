@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -15,8 +16,35 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _uses_tls(uri: str) -> bool:
+    """Atlas-style ``mongodb+srv://`` strings always use TLS; plain ones only with ``tls=true``/``ssl=true``."""
+    lowered = uri.lower()
+    return lowered.startswith("mongodb+srv://") or "tls=true" in lowered or "ssl=true" in lowered
+
+
+def client_options(uri: str) -> dict[str, Any]:
+    """Options for ``MongoClient``. TLS connections verify the server against the certifi CA bundle.
+
+    Python builds that do not use the operating system's certificate store (python.org on macOS, a bundled
+    app) fail an Atlas connection with "SSL handshake failed ... CERTIFICATE_VERIFY_FAILED" otherwise.
+    A ``tlsCAFile`` in the URI or ``MONGODB_TLS_CA_FILE`` in the environment takes precedence.
+    """
+    options: dict[str, Any] = {"serverSelectionTimeoutMS": 15000, "tz_aware": True}
+    if _uses_tls(uri) and "tlscafile" not in uri.lower():
+        ca_file = os.environ.get("MONGODB_TLS_CA_FILE", "").strip()
+        if not ca_file:
+            try:
+                import certifi
+                ca_file = certifi.where()
+            except ImportError:
+                ca_file = ""
+        if ca_file:
+            options["tlsCAFile"] = ca_file
+    return options
+
+
 def connect(config: ServerConfig) -> Database:
-    client = MongoClient(config.mongodb_uri, serverSelectionTimeoutMS=8000, tz_aware=True)
+    client = MongoClient(config.mongodb_uri, **client_options(config.mongodb_uri))
     return client[config.mongodb_db]
 
 
