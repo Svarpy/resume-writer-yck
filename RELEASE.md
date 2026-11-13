@@ -1,6 +1,6 @@
 # Release checklist (Sprint 2)
 
-Single source of truth: ``APP_VERSION`` in ``resume_writer/constants.py``
+Single source of truth: ``APP_VERSION`` in ``resume_core/constants.py``
 (e.g. ``v3.0.0`` or ``v3.0.0Beta2``). The git tag and GitHub Release **must**
 use the same string (``vX.Y.Z`` or ``vX.Y.ZBetaN``).
 
@@ -10,9 +10,8 @@ For the **v3.0.0Beta2** test cut only, `.github/workflows/release.yml` triggers
 on pushes to **``genpubv3``** (not ``main``). Do **not** merge this Beta2 cut
 to ``main``. After the test, revert the workflow branch filter to ``main``.
 
-Beta2 publishes a **normal** GitHub Release (no ``prerelease: true`` flag) so
-the in-app updater — which skips GitHub prereleases — can install it. The tag
-form ``v3.0.0Beta2`` is still a pre-release *version* relative to ``v3.0.0``.
+Beta2 publishes a **normal** GitHub Release (no ``prerelease: true`` flag). The
+tag form ``v3.0.0Beta2`` is still a pre-release *version* relative to ``v3.0.0``.
 
 Asset example: ``ResumeWriterv3.0.0Beta2.app.zip``.
 
@@ -64,7 +63,7 @@ Display name inside the binary/bundle: `Resume Writer vX.Y.ZBetaN`.
 | HEAD has **no** matching tag | Tests only (no publish) |
 
 Workflow file: `.github/workflows/release.yml`  
-Helpers: `resume_writer/version.py`, `release/build_release.py`,
+Helpers: `resume_core/version.py`, `release/build_release.py`,
 `release/check_release_tag.py`
 
 ## Signing (Sprint 2 decision)

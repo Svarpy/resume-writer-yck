@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
       # Tk UI tests (test_sprint1_ui_bugfixes) need a display; ubuntu-latest is headless.
       - name: Install xvfb for Tk UI tests
@@ -167,8 +167,7 @@ jobs:
             echo "Resume Writer ${VERSION}"
             echo ""
             echo "Built by GitHub Actions from genpubv3 (PyInstaller onedir, unsigned)."
-            echo "TEMPORARY Beta2 test branch trigger — not a GitHub prerelease flag"
-            echo "(normal Release so the in-app updater can see it)."
+            echo "TEMPORARY Beta2 test branch trigger — not a GitHub prerelease flag."
             echo ""
             echo "Assets:"
             echo "- macOS: ResumeWriter${VERSION}.app.zip"
@@ -176,8 +175,7 @@ jobs:
             echo ""
             echo "See RELEASE.md for the cut checklist and signing status."
           } > release-notes.md
-          # Intentionally NOT --prerelease: updater skips GitHub prerelease=true.
-          # Beta2 uses a normal Release so Check for updates works end-to-end.
+          # Intentionally NOT --prerelease: Beta2 is published as a normal Release.
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists; uploading any missing assets."
             gh release upload "$VERSION" release-assets/* --clobber

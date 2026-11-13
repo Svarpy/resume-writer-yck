@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from resume_writer.constants import APP_VERSION  # noqa: E402
-from resume_writer.version import normalize_version  # noqa: E402
+from resume_core.constants import APP_VERSION  # noqa: E402
+from resume_core.version import normalize_version  # noqa: E402
 
 
 def _git(*args: str) -> str:

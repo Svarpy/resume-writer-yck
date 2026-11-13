@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from resume_writer.version import (  # noqa: E402
+from resume_core.version import (  # noqa: E402
     APP_VERSION,
     compact_version_slug,
     display_name,
@@ -30,7 +30,6 @@ from resume_writer.version import (  # noqa: E402
 )
 
 
-DOC_SRC = ROOT / "resume_writer" / "docs" / "documentation.md"
 DIST = ROOT / "dist"
 RELEASE_OUT = ROOT / "release" / "out"
 
@@ -46,11 +45,6 @@ def _bundle_name() -> str:
     return pyinstaller_name()
 
 
-def _add_data_arg() -> str:
-    sep = ";" if _is_windows() else ":"
-    return f"{DOC_SRC}{sep}resume_writer/docs"
-
-
 def run_pyinstaller() -> Path:
     """Run PyInstaller onedir/windowed build; return the primary artifact path."""
     try:
@@ -60,28 +54,27 @@ def run_pyinstaller() -> Path:
             "PyInstaller is required. Install with: pip install -r requirements.txt"
         ) from exc
 
-    if not DOC_SRC.is_file():
-        raise SystemExit(f"Missing documentation data file: {DOC_SRC}")
-
     name = _bundle_name()
     cmd = [
         sys.executable,
         "-m",
         "PyInstaller",
-        str(ROOT / "resume_writer_app.py"),
+        str(ROOT / "resume_gui" / "__main__.py"),
         "--noconfirm",
         "--clean",
         "--windowed",
         "--onedir",
         f"--name={name}",
-        f"--add-data={_add_data_arg()}",
         f"--distpath={DIST}",
         f"--workpath={ROOT / 'build'}",
         f"--specpath={ROOT / 'build'}",
-        "--hidden-import=bcrypt",
+        # The desktop bundle is a client only: no server code, no database drivers, no secrets.
+        "--exclude-module=resume_server",
+        "--exclude-module=pymongo",
+        "--exclude-module=fastapi",
+        "--exclude-module=uvicorn",
+        "--exclude-module=resume_mcp",
         "--hidden-import=docx",
-        "--hidden-import=certifi",
-        "--collect-data=certifi",
     ]
     print(f"Building {name!r} (APP_VERSION={APP_VERSION}) ...", flush=True)
     print("PyInstaller cmd:", cmd, flush=True)

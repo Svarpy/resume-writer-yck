@@ -1,4 +1,14 @@
+# Everything (server + desktop app + MCP). Install only what you need with the extras in pyproject.toml.
 python-docx>=1.2.0
 bcrypt>=4.0.0
-certifi>=2024.0.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pymongo>=4.6
+dnspython>=2.6
+certifi>=2024.2.2
+python-dotenv>=1.0
+PyJWT>=2.8
+python-multipart>=0.0.9
+httpx>=0.27
+mcp>=2.0
 pyinstaller
